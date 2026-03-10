@@ -9,11 +9,6 @@ description = "High-level pipeline orchestration for the splica media processing
 
 [dependencies]
 splica-core.workspace = true
-splica-mp4.workspace = true
-splica-webm.workspace = true
-splica-mkv.workspace = true
-splica-codec.workspace = true
-splica-filter.workspace = true
 
 [dev-dependencies]
 bytes.workspace = true

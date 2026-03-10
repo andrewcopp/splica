@@ -31,7 +31,7 @@ jobs:
       - run: cargo clippy --all-targets -- -D warnings
 
   wasm:
-    name: WASM (splica-core + splica-mp4)
+    name: WASM (pure-Rust crates)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -39,8 +39,17 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build --target wasm32-unknown-unknown -p splica-core
-      - name: Build splica-mp4 WASM with bindings
+      - name: Build pure-Rust crates for WASM
+        run: >
+          cargo build --target wasm32-unknown-unknown
+          -p splica-core
+          -p splica-mp4
+          -p splica-webm
+          -p splica-filter
+          -p splica-pipeline
+      - name: Build splica-codec for WASM (traits only, no FFI)
+        run: cargo build --target wasm32-unknown-unknown -p splica-codec --no-default-features
+      - name: Build splica-mp4 WASM with bindings (release)
         run: cargo build --target wasm32-unknown-unknown -p splica-mp4 --features wasm --release
       - name: Report WASM bundle size
         id: wasm_size
