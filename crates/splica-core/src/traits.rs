@@ -115,6 +115,67 @@ pub trait Decoder {
 }
 
 // ---------------------------------------------------------------------------
+// AudioDecoder
+// ---------------------------------------------------------------------------
+
+/// Decompresses audio packets into raw audio frames.
+///
+/// Uses the same send/receive pattern as [`Decoder`] for consistency.
+/// Audio codecs may buffer multiple packets before producing output
+/// (e.g., SBR in AAC, Opus lookahead).
+///
+/// # Codec-specific parameters
+///
+/// Use [`as_any()`](AudioDecoder::as_any) to downcast to the concrete type
+/// for codec-specific access (e.g., AAC profile, Opus bandwidth mode).
+pub trait AudioDecoder {
+    /// Sends a compressed audio packet to the decoder.
+    ///
+    /// Pass `None` to signal end-of-stream and flush any buffered frames.
+    fn send_packet(&mut self, packet: Option<&Packet>) -> Result<(), DecodeError>;
+
+    /// Receives a decoded audio frame from the decoder.
+    ///
+    /// Returns `Ok(None)` when no more frames are available (call `send_packet` again).
+    fn receive_frame(&mut self) -> Result<Option<AudioFrame>, DecodeError>;
+
+    /// Returns a reference to the concrete decoder type for downcasting.
+    fn as_any(&self) -> &dyn Any;
+
+    /// Returns a mutable reference to the concrete decoder type for downcasting.
+    fn as_any_mut(&mut self) -> &mut dyn Any;
+}
+
+// ---------------------------------------------------------------------------
+// AudioEncoder
+// ---------------------------------------------------------------------------
+
+/// Compresses raw audio frames into packets.
+///
+/// Uses the same send/receive pattern as [`Encoder`] for consistency.
+///
+/// Codec-specific configuration (bitrate, sample rate, etc.) is set on the
+/// concrete encoder type at construction time. Use [`as_any()`](AudioEncoder::as_any)
+/// to downcast and inspect codec-specific state at runtime.
+pub trait AudioEncoder {
+    /// Sends a raw audio frame to the encoder.
+    ///
+    /// Pass `None` to signal end-of-stream and flush any buffered packets.
+    fn send_frame(&mut self, frame: Option<&AudioFrame>) -> Result<(), EncodeError>;
+
+    /// Receives a compressed packet from the encoder.
+    ///
+    /// Returns `Ok(None)` when no more packets are available (call `send_frame` again).
+    fn receive_packet(&mut self) -> Result<Option<Packet>, EncodeError>;
+
+    /// Returns a reference to the concrete encoder type for downcasting.
+    fn as_any(&self) -> &dyn Any;
+
+    /// Returns a mutable reference to the concrete encoder type for downcasting.
+    fn as_any_mut(&mut self) -> &mut dyn Any;
+}
+
+// ---------------------------------------------------------------------------
 // Encoder
 // ---------------------------------------------------------------------------
 

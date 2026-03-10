@@ -11,17 +11,24 @@ use std::collections::HashMap;
 
 pub use event::{PipelineEvent, PipelineEventKind};
 use splica_core::{
-    Decoder, Demuxer, Encoder, Frame, Muxer, PipelineError, TrackIndex, VideoFilter,
+    AudioDecoder, AudioEncoder, AudioFilter, Decoder, Demuxer, Encoder, Frame, Muxer,
+    PipelineError, TrackIndex, VideoFilter,
 };
 
 /// How the pipeline should handle a track.
 #[allow(dead_code)] // Copy variant used once stream-copy mode is wired up
 enum TrackMode {
-    /// Decode → filter → encode: full transcode path.
+    /// Decode → filter → encode: full video transcode path.
     Transcode {
         decoder: Box<dyn Decoder>,
         encoder: Box<dyn Encoder>,
         filters: Vec<Box<dyn VideoFilter>>,
+    },
+    /// Decode → filter → encode: full audio transcode path.
+    AudioTranscode {
+        decoder: Box<dyn AudioDecoder>,
+        encoder: Box<dyn AudioEncoder>,
+        filters: Vec<Box<dyn AudioFilter>>,
     },
     /// Copy: pass compressed packets directly to the muxer.
     Copy,
@@ -53,6 +60,9 @@ pub struct PipelineBuilder<F = fn(PipelineEvent)> {
     decoders: HashMap<TrackIndex, Box<dyn Decoder>>,
     encoders: HashMap<TrackIndex, Box<dyn Encoder>>,
     filters: HashMap<TrackIndex, Vec<Box<dyn VideoFilter>>>,
+    audio_decoders: HashMap<TrackIndex, Box<dyn AudioDecoder>>,
+    audio_encoders: HashMap<TrackIndex, Box<dyn AudioEncoder>>,
+    audio_filters: HashMap<TrackIndex, Vec<Box<dyn AudioFilter>>>,
 }
 
 impl PipelineBuilder {
@@ -65,6 +75,9 @@ impl PipelineBuilder {
             decoders: HashMap::new(),
             encoders: HashMap::new(),
             filters: HashMap::new(),
+            audio_decoders: HashMap::new(),
+            audio_encoders: HashMap::new(),
+            audio_filters: HashMap::new(),
         }
     }
 }
@@ -85,6 +98,9 @@ impl<F: Fn(PipelineEvent)> PipelineBuilder<F> {
             decoders: self.decoders,
             encoders: self.encoders,
             filters: self.filters,
+            audio_decoders: self.audio_decoders,
+            audio_encoders: self.audio_encoders,
+            audio_filters: self.audio_filters,
         }
     }
 
@@ -129,6 +145,47 @@ impl<F: Fn(PipelineEvent)> PipelineBuilder<F> {
         self
     }
 
+    /// Registers an audio decoder for a specific track.
+    ///
+    /// Audio tracks without a decoder will be passed through in copy mode.
+    pub fn with_audio_decoder(
+        mut self,
+        track: TrackIndex,
+        decoder: impl AudioDecoder + 'static,
+    ) -> Self {
+        self.audio_decoders.insert(track, Box::new(decoder));
+        self
+    }
+
+    /// Registers an audio encoder for a specific track.
+    ///
+    /// Must be paired with an audio decoder for the same track.
+    pub fn with_audio_encoder(
+        mut self,
+        track: TrackIndex,
+        encoder: impl AudioEncoder + 'static,
+    ) -> Self {
+        self.audio_encoders.insert(track, Box::new(encoder));
+        self
+    }
+
+    /// Registers an audio filter for a specific track.
+    ///
+    /// Filters are applied in order after decode and before encode.
+    /// Multiple filters can be added per track by calling this multiple times.
+    /// Only applies to audio tracks in transcode mode (with audio decoder + encoder).
+    pub fn with_audio_filter(
+        mut self,
+        track: TrackIndex,
+        filter: impl AudioFilter + 'static,
+    ) -> Self {
+        self.audio_filters
+            .entry(track)
+            .or_default()
+            .push(Box::new(filter));
+        self
+    }
+
     /// Builds and returns a configured [`Pipeline`] ready to run.
     ///
     /// Returns an error if the configuration is invalid (missing demuxer/muxer,
@@ -141,7 +198,7 @@ impl<F: Fn(PipelineEvent)> PipelineBuilder<F> {
             message: "pipeline requires a muxer".to_string(),
         })?;
 
-        // Validate: every encoder must have a matching decoder
+        // Validate: every video encoder must have a matching decoder
         for track in self.encoders.keys() {
             if !self.decoders.contains_key(track) {
                 return Err(PipelineError::Config {
@@ -153,12 +210,36 @@ impl<F: Fn(PipelineEvent)> PipelineBuilder<F> {
             }
         }
 
-        // Validate: every decoder must have a matching encoder
+        // Validate: every video decoder must have a matching encoder
         for track in self.decoders.keys() {
             if !self.encoders.contains_key(track) {
                 return Err(PipelineError::Config {
                     message: format!(
                         "track {} has a decoder but no encoder — both are required for transcoding",
+                        track.0
+                    ),
+                });
+            }
+        }
+
+        // Validate: every audio encoder must have a matching decoder
+        for track in self.audio_encoders.keys() {
+            if !self.audio_decoders.contains_key(track) {
+                return Err(PipelineError::Config {
+                    message: format!(
+                        "track {} has an audio encoder but no audio decoder — both are required for transcoding",
+                        track.0
+                    ),
+                });
+            }
+        }
+
+        // Validate: every audio decoder must have a matching encoder
+        for track in self.audio_decoders.keys() {
+            if !self.audio_encoders.contains_key(track) {
+                return Err(PipelineError::Config {
+                    message: format!(
+                        "track {} has an audio decoder but no audio encoder — both are required for transcoding",
                         track.0
                     ),
                 });
@@ -173,6 +254,18 @@ impl<F: Fn(PipelineEvent)> PipelineBuilder<F> {
             track_modes.insert(
                 track,
                 TrackMode::Transcode {
+                    decoder,
+                    encoder,
+                    filters,
+                },
+            );
+        }
+        for (track, decoder) in self.audio_decoders.drain() {
+            let encoder = self.audio_encoders.remove(&track).expect("validated above");
+            let filters = self.audio_filters.remove(&track).unwrap_or_default();
+            track_modes.insert(
+                track,
+                TrackMode::AudioTranscode {
                     decoder,
                     encoder,
                     filters,
@@ -286,6 +379,68 @@ fn drain_encoder_to_muxer<F: Fn(PipelineEvent)>(
     Ok(())
 }
 
+/// Drains all available frames from an audio decoder, applies audio filters,
+/// encodes them, and writes resulting packets to the muxer.
+fn drain_audio_decoder_to_muxer<F: Fn(PipelineEvent)>(
+    decoder: &mut dyn AudioDecoder,
+    encoder: &mut dyn AudioEncoder,
+    filters: &mut [Box<dyn AudioFilter>],
+    muxer: &mut dyn Muxer,
+    output_track: TrackIndex,
+    on_event: &Option<F>,
+    counters: &mut PipelineCounters,
+) -> Result<(), PipelineError> {
+    while let Some(frame) = decoder.receive_frame()? {
+        counters.frames_decoded += 1;
+        emit_event(
+            on_event,
+            PipelineEventKind::FramesDecoded {
+                count: counters.frames_decoded,
+            },
+        );
+
+        // Apply audio filters
+        let mut current = frame;
+        for filter in filters.iter_mut() {
+            current = filter.process(current)?;
+        }
+
+        encoder.send_frame(Some(&current))?;
+        drain_audio_encoder_to_muxer(encoder, muxer, output_track, on_event, counters)?;
+    }
+    Ok(())
+}
+
+/// Drains all available packets from an audio encoder and writes them to the muxer.
+fn drain_audio_encoder_to_muxer<F: Fn(PipelineEvent)>(
+    encoder: &mut dyn AudioEncoder,
+    muxer: &mut dyn Muxer,
+    output_track: TrackIndex,
+    on_event: &Option<F>,
+    counters: &mut PipelineCounters,
+) -> Result<(), PipelineError> {
+    while let Some(mut encoded_packet) = encoder.receive_packet()? {
+        counters.frames_encoded += 1;
+        emit_event(
+            on_event,
+            PipelineEventKind::FramesEncoded {
+                count: counters.frames_encoded,
+            },
+        );
+
+        encoded_packet.track_index = output_track;
+        muxer.write_packet(&encoded_packet)?;
+        counters.packets_written += 1;
+        emit_event(
+            on_event,
+            PipelineEventKind::PacketsWritten {
+                count: counters.packets_written,
+            },
+        );
+    }
+    Ok(())
+}
+
 struct PipelineCounters {
     packets_read: u64,
     frames_decoded: u64,
@@ -354,6 +509,22 @@ impl<F: Fn(PipelineEvent)> Pipeline<F> {
                         &mut counters,
                     )?;
                 }
+                Some(TrackMode::AudioTranscode {
+                    decoder,
+                    encoder,
+                    filters,
+                }) => {
+                    decoder.send_packet(Some(&packet))?;
+                    drain_audio_decoder_to_muxer(
+                        decoder.as_mut(),
+                        encoder.as_mut(),
+                        filters,
+                        self.muxer.as_mut(),
+                        output_track,
+                        &self.on_event,
+                        &mut counters,
+                    )?;
+                }
                 Some(TrackMode::Copy) | None => {
                     // Copy mode: pass packet directly to muxer
                     let mut out_packet = packet;
@@ -374,33 +545,60 @@ impl<F: Fn(PipelineEvent)> Pipeline<F> {
         let track_indices: Vec<TrackIndex> = self.track_modes.keys().copied().collect();
         for track_idx in track_indices {
             let output_track = input_to_output[&track_idx];
-            if let Some(TrackMode::Transcode {
-                decoder,
-                encoder,
-                filters,
-            }) = self.track_modes.get_mut(&track_idx)
-            {
-                // Signal end-of-stream to decoder, drain remaining frames
-                decoder.send_packet(None)?;
-                drain_decoder_to_muxer(
-                    decoder.as_mut(),
-                    encoder.as_mut(),
+            match self.track_modes.get_mut(&track_idx) {
+                Some(TrackMode::Transcode {
+                    decoder,
+                    encoder,
                     filters,
-                    self.muxer.as_mut(),
-                    output_track,
-                    &self.on_event,
-                    &mut counters,
-                )?;
+                }) => {
+                    // Signal end-of-stream to decoder, drain remaining frames
+                    decoder.send_packet(None)?;
+                    drain_decoder_to_muxer(
+                        decoder.as_mut(),
+                        encoder.as_mut(),
+                        filters,
+                        self.muxer.as_mut(),
+                        output_track,
+                        &self.on_event,
+                        &mut counters,
+                    )?;
 
-                // Signal end-of-stream to encoder, drain remaining packets
-                encoder.send_frame(None)?;
-                drain_encoder_to_muxer(
-                    encoder.as_mut(),
-                    self.muxer.as_mut(),
-                    output_track,
-                    &self.on_event,
-                    &mut counters,
-                )?;
+                    // Signal end-of-stream to encoder, drain remaining packets
+                    encoder.send_frame(None)?;
+                    drain_encoder_to_muxer(
+                        encoder.as_mut(),
+                        self.muxer.as_mut(),
+                        output_track,
+                        &self.on_event,
+                        &mut counters,
+                    )?;
+                }
+                Some(TrackMode::AudioTranscode {
+                    decoder,
+                    encoder,
+                    filters,
+                }) => {
+                    decoder.send_packet(None)?;
+                    drain_audio_decoder_to_muxer(
+                        decoder.as_mut(),
+                        encoder.as_mut(),
+                        filters,
+                        self.muxer.as_mut(),
+                        output_track,
+                        &self.on_event,
+                        &mut counters,
+                    )?;
+
+                    encoder.send_frame(None)?;
+                    drain_audio_encoder_to_muxer(
+                        encoder.as_mut(),
+                        self.muxer.as_mut(),
+                        output_track,
+                        &self.on_event,
+                        &mut counters,
+                    )?;
+                }
+                _ => {}
             }
         }
 

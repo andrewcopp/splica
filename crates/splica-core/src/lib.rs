@@ -17,4 +17,7 @@ pub use media::{
 };
 pub use smpte::SmpteTimecode;
 pub use timestamp::Timestamp;
-pub use traits::{AudioFilter, Decoder, Demuxer, Encoder, Muxer, SeekMode, Seekable, VideoFilter};
+pub use traits::{
+    AudioDecoder, AudioEncoder, AudioFilter, Decoder, Demuxer, Encoder, Muxer, SeekMode, Seekable,
+    VideoFilter,
+};
