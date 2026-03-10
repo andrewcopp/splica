@@ -559,7 +559,9 @@ dependencies = [
 name = "splica-webm"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "splica-core",
+ "thiserror",
 ]
 
 [[package]]
