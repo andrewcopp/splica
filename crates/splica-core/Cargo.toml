@@ -1,0 +1,11 @@
+[package]
+name = "splica-core"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Shared types, traits, and error types for the splica media processing library"
+
+[dependencies]
+thiserror.workspace = true

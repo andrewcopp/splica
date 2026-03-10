@@ -1,0 +1,30 @@
+[workspace]
+members = [
+    "crates/splica-core",
+    "crates/splica-mp4",
+    "crates/splica-webm",
+    "crates/splica-mkv",
+    "crates/splica-codec",
+    "crates/splica-filter",
+    "crates/splica-pipeline",
+    "crates/splica-cli",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.75"
+license = "Apache-2.0"
+repository = "https://github.com/TODO/splica"
+
+[workspace.dependencies]
+splica-core = { path = "crates/splica-core" }
+splica-mp4 = { path = "crates/splica-mp4" }
+splica-webm = { path = "crates/splica-webm" }
+splica-mkv = { path = "crates/splica-mkv" }
+splica-codec = { path = "crates/splica-codec" }
+splica-filter = { path = "crates/splica-filter" }
+splica-pipeline = { path = "crates/splica-pipeline" }
+splica-cli = { path = "crates/splica-cli" }
+
+thiserror = "2"
