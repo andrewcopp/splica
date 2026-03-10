@@ -12,4 +12,8 @@ name = "splica"
 path = "src/main.rs"
 
 [dependencies]
+splica-core.workspace = true
+splica-mp4.workspace = true
 splica-pipeline.workspace = true
+clap = { version = "4", features = ["derive"] }
+miette = { version = "7", features = ["fancy"] }
