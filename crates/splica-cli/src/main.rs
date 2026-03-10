@@ -138,6 +138,44 @@ fn main() -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
+// Output format validation
+// ---------------------------------------------------------------------------
+
+/// Validates that the output file extension is a format splica can write.
+/// Fails fast before any input is read, with a helpful error message.
+fn validate_output_format(output: &PathBuf) -> Result<()> {
+    let ext = output
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+
+    match ext.as_str() {
+        "mp4" | "m4v" | "m4a" => Ok(()),
+        "webm" => Err(miette::miette!(
+            "output format 'webm' is not yet supported for writing\n  \
+             → splica can currently write: mp4\n  \
+             → WebM output is planned for a future release\n  \
+             → To convert to MP4, use: splica convert -i <input> -o output.mp4"
+        )),
+        "mkv" | "mka" => Err(miette::miette!(
+            "output format 'mkv' is not yet supported for writing\n  \
+             → splica can currently write: mp4\n  \
+             → MKV output is planned for a future release"
+        )),
+        "" => Err(miette::miette!(
+            "output file has no extension — cannot determine output format\n  \
+             → Use a recognized extension: .mp4"
+        )),
+        other => Err(miette::miette!(
+            "unsupported output format '.{other}'\n  \
+             → splica can currently write: mp4\n  \
+             → Supported extensions: .mp4, .m4v, .m4a"
+        )),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Time parsing
 // ---------------------------------------------------------------------------
 
@@ -402,6 +440,7 @@ fn format_codec(codec: &splica_core::Codec) -> String {
 // ---------------------------------------------------------------------------
 
 fn convert(input: &PathBuf, output: &PathBuf) -> Result<()> {
+    validate_output_format(output)?;
     let mut demuxer = open_demuxer(input)?;
 
     let out_file = File::create(output)
@@ -450,6 +489,7 @@ fn convert(input: &PathBuf, output: &PathBuf) -> Result<()> {
 // ---------------------------------------------------------------------------
 
 fn trim(input: &PathBuf, output: &PathBuf, start: Option<&str>, end: Option<&str>) -> Result<()> {
+    validate_output_format(output)?;
     let start_secs = start.map(parse_time).transpose()?;
     let end_secs = end.map(parse_time).transpose()?;
 
@@ -588,6 +628,7 @@ fn trim(input: &PathBuf, output: &PathBuf, start: Option<&str>, end: Option<&str
 // ---------------------------------------------------------------------------
 
 fn extract_audio(input: &PathBuf, output: &PathBuf) -> Result<()> {
+    validate_output_format(output)?;
     let mut demuxer =
         open_mp4_demuxer(input).wrap_err("extract-audio currently requires MP4 input")?;
 
@@ -718,6 +759,7 @@ fn transcode(
     preset: &EncodePreset,
     max_fps: Option<f32>,
 ) -> Result<()> {
+    validate_output_format(output)?;
     let bitrate_bps = match bitrate {
         Some(s) => parse_bitrate(s)?,
         None => match preset {

@@ -123,6 +123,72 @@ fn test_that_probe_json_output_is_valid_json() {
     let _ = std::fs::remove_file(&path);
 }
 
+#[test]
+fn test_that_convert_rejects_unsupported_output_format() {
+    let dir = std::env::temp_dir().join("splica_test");
+    std::fs::create_dir_all(&dir).unwrap();
+    let input_path = dir.join("format_test_input.mp4");
+    let output_path = dir.join("format_test_output.webm");
+
+    let source_mp4 = build_muxed_test_mp4();
+    std::fs::write(&input_path, &source_mp4).unwrap();
+
+    let output = splica_binary()
+        .args([
+            "convert",
+            "-i",
+            input_path.to_str().unwrap(),
+            "-o",
+            output_path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("not yet supported"),
+        "should explain webm is unsupported. stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("mp4"),
+        "should suggest mp4 as alternative. stderr: {stderr}"
+    );
+
+    let _ = std::fs::remove_file(&input_path);
+}
+
+#[test]
+fn test_that_convert_accepts_mp4_output() {
+    let dir = std::env::temp_dir().join("splica_test");
+    std::fs::create_dir_all(&dir).unwrap();
+    let input_path = dir.join("format_ok_input.mp4");
+    let output_path = dir.join("format_ok_output.mp4");
+
+    let source_mp4 = build_muxed_test_mp4();
+    std::fs::write(&input_path, &source_mp4).unwrap();
+
+    let output = splica_binary()
+        .args([
+            "convert",
+            "-i",
+            input_path.to_str().unwrap(),
+            "-o",
+            output_path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "mp4 output should succeed. stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let _ = std::fs::remove_file(&input_path);
+    let _ = std::fs::remove_file(&output_path);
+}
+
 /// Creates a valid MP4 by building a source, demuxing it, and remuxing it.
 /// This exercises the full muxer pipeline to produce a file the demuxer can read.
 fn build_muxed_test_mp4() -> Vec<u8> {
