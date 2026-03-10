@@ -7,7 +7,17 @@ license.workspace = true
 repository.workspace = true
 description = "WebM (Matroska subset) demuxer and muxer for the splica media processing library"
 
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[features]
+wasm = ["dep:wasm-bindgen", "dep:js-sys", "dep:serde", "dep:serde_json"]
+
 [dependencies]
 bytes.workspace = true
 splica-core.workspace = true
 thiserror.workspace = true
+wasm-bindgen = { version = "0.2", optional = true }
+js-sys = { version = "0.3", optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }

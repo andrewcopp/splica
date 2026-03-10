@@ -51,16 +51,22 @@ jobs:
         run: cargo build --target wasm32-unknown-unknown -p splica-codec --no-default-features
       - name: Build splica-mp4 WASM with bindings (release)
         run: cargo build --target wasm32-unknown-unknown -p splica-mp4 --features wasm --release
+      - name: Build splica-webm WASM with bindings (release)
+        run: cargo build --target wasm32-unknown-unknown -p splica-webm --features wasm --release
       - name: Report WASM bundle size
         id: wasm_size
         run: |
-          WASM_SIZE=$(stat -c%s target/wasm32-unknown-unknown/release/splica_mp4.wasm)
-          WASM_SIZE_KB=$((WASM_SIZE / 1024))
-          echo "splica_mp4_wasm_bytes=$WASM_SIZE" >> "$GITHUB_OUTPUT"
+          MP4_SIZE=$(stat -c%s target/wasm32-unknown-unknown/release/splica_mp4.wasm)
+          MP4_SIZE_KB=$((MP4_SIZE / 1024))
+          WEBM_SIZE=$(stat -c%s target/wasm32-unknown-unknown/release/splica_webm.wasm)
+          WEBM_SIZE_KB=$((WEBM_SIZE / 1024))
+          echo "splica_mp4_wasm_bytes=$MP4_SIZE" >> "$GITHUB_OUTPUT"
+          echo "splica_webm_wasm_bytes=$WEBM_SIZE" >> "$GITHUB_OUTPUT"
           echo "### WASM Bundle Size" >> "$GITHUB_STEP_SUMMARY"
           echo "| Crate | Size |" >> "$GITHUB_STEP_SUMMARY"
           echo "|-------|------|" >> "$GITHUB_STEP_SUMMARY"
-          echo "| splica-mp4 (release) | ${WASM_SIZE_KB} KB (${WASM_SIZE} bytes) |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| splica-mp4 (release) | ${MP4_SIZE_KB} KB (${MP4_SIZE} bytes) |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| splica-webm (release) | ${WEBM_SIZE_KB} KB (${WEBM_SIZE} bytes) |" >> "$GITHUB_STEP_SUMMARY"
 
   fmt:
     name: Format

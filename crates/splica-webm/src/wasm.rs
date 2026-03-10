@@ -1,7 +1,7 @@
-//! WASM bindings for the MP4 demuxer.
+//! WASM bindings for the WebM demuxer.
 //!
 //! Provides a JS-callable API for extracting track metadata and reading
-//! compressed packets from MP4 files. Enabled via the `wasm` feature flag.
+//! compressed packets from WebM files. Enabled via the `wasm` feature flag.
 
 use std::io::Cursor;
 
@@ -10,7 +10,7 @@ use wasm_bindgen::prelude::*;
 
 use splica_core::Demuxer;
 
-use crate::Mp4Demuxer;
+use crate::WebmDemuxer;
 
 /// JS-facing video track metadata.
 #[derive(Serialize)]
@@ -31,14 +31,14 @@ struct JsAudioTrackInfo {
     duration_seconds: Option<f64>,
 }
 
-/// MP4 demuxer accessible from JavaScript.
+/// WebM demuxer accessible from JavaScript.
 ///
 /// # Example (JS)
 ///
 /// ```js
-/// const response = await fetch("video.mp4");
+/// const response = await fetch("video.webm");
 /// const buffer = new Uint8Array(await response.arrayBuffer());
-/// const demuxer = WasmMp4Demuxer.fromBytes(buffer);
+/// const demuxer = WasmWebmDemuxer.fromBytes(buffer);
 /// console.log("Tracks:", demuxer.trackCount());
 /// console.log("Video:", demuxer.videoTrackInfo());
 /// while (true) {
@@ -48,18 +48,18 @@ struct JsAudioTrackInfo {
 /// }
 /// ```
 #[wasm_bindgen]
-pub struct WasmMp4Demuxer {
-    inner: Mp4Demuxer<Cursor<Vec<u8>>>,
+pub struct WasmWebmDemuxer {
+    inner: WebmDemuxer<Cursor<Vec<u8>>>,
 }
 
 #[wasm_bindgen]
-impl WasmMp4Demuxer {
-    /// Constructs an MP4 demuxer from an in-memory buffer.
+impl WasmWebmDemuxer {
+    /// Constructs a WebM demuxer from an in-memory buffer.
     #[wasm_bindgen(js_name = "fromBytes")]
-    pub fn from_bytes(data: &[u8]) -> Result<WasmMp4Demuxer, JsValue> {
+    pub fn from_bytes(data: &[u8]) -> Result<WasmWebmDemuxer, JsValue> {
         let cursor = Cursor::new(data.to_vec());
-        let inner = Mp4Demuxer::open(cursor).map_err(|e| JsValue::from_str(&e.to_string()))?;
-        Ok(WasmMp4Demuxer { inner })
+        let inner = WebmDemuxer::open(cursor).map_err(|e| JsValue::from_str(&e.to_string()))?;
+        Ok(WasmWebmDemuxer { inner })
     }
 
     /// Returns the number of tracks in the container.

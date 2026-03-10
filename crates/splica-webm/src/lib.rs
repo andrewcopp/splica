@@ -10,3 +10,6 @@ mod muxer;
 pub use demuxer::WebmDemuxer;
 pub use error::WebmError;
 pub use muxer::WebmMuxer;
+
+#[cfg(feature = "wasm")]
+pub mod wasm;

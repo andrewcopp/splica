@@ -248,6 +248,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "js-sys"
+version = "0.3.91"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b49715b7073f385ba4bc528e5747d02e66cb39c6146efb66b781f131f0fb399c"
+dependencies = [
+ "once_cell",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "libc"
 version = "0.2.183"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -539,6 +549,7 @@ name = "splica-mp4"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "js-sys",
  "serde",
  "serde_json",
  "splica-core",
@@ -551,12 +562,7 @@ name = "splica-pipeline"
 version = "0.1.0"
 dependencies = [
  "bytes",
- "splica-codec",
  "splica-core",
- "splica-filter",
- "splica-mkv",
- "splica-mp4",
- "splica-webm",
 ]
 
 [[package]]
@@ -564,8 +570,12 @@ name = "splica-webm"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "js-sys",
+ "serde",
+ "serde_json",
  "splica-core",
  "thiserror",
+ "wasm-bindgen",
 ]
 
 [[package]]
