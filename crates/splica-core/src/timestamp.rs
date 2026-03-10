@@ -114,7 +114,13 @@ impl Timestamp {
 
 impl fmt::Debug for Timestamp {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Timestamp({}/{} = {:.6}s)", self.ticks, self.timebase, self.as_seconds_f64())
+        write!(
+            f,
+            "Timestamp({}/{} = {:.6}s)",
+            self.ticks,
+            self.timebase,
+            self.as_seconds_f64()
+        )
     }
 }
 
@@ -264,5 +270,39 @@ mod tests {
     #[should_panic(expected = "timebase must be non-zero")]
     fn test_that_zero_timebase_panics() {
         let _ = Timestamp::new(0, 0);
+    }
+
+    #[test]
+    fn test_that_rescale_handles_large_90khz_values_without_overflow() {
+        // GIVEN — a large tick value at 90kHz (common MPEG-TS timebase)
+        // representing ~28.5 hours of content (a very long stream)
+        let ticks: i64 = 90_000 * 3600 * 28 + 90_000 * 1800; // 28.5 hours
+        let ts = Timestamp::new(ticks, 90_000);
+
+        // WHEN — rescale to 48kHz audio timebase
+        let rescaled = ts.rescale(48_000);
+
+        // THEN — should succeed (i128 intermediate prevents overflow)
+        let result = rescaled.unwrap();
+        assert_eq!(result.timebase(), 48_000);
+
+        // Verify accuracy: both should represent the same duration
+        let original_seconds = ts.as_seconds_f64();
+        let rescaled_seconds = result.as_seconds_f64();
+        assert!((original_seconds - rescaled_seconds).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_that_rescale_uses_128bit_intermediates() {
+        // GIVEN — values that would overflow i64 if multiplied directly
+        // ticks * target_timebase would overflow i64 without i128
+        let large_ticks: i64 = i64::MAX / 2;
+        let ts = Timestamp::new(large_ticks, 90_000);
+
+        // WHEN — rescale to a timebase that would cause i64 overflow
+        let result = ts.rescale(48_000);
+
+        // THEN — should succeed thanks to i128 intermediate arithmetic
+        assert!(result.is_some());
     }
 }

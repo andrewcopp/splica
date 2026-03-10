@@ -5,9 +5,7 @@
 //! keeping traits object-safe.
 
 use crate::error::{DecodeError, DemuxError, EncodeError, FilterError, MuxError};
-use crate::media::{
-    AudioFrame, Frame, Packet, TrackIndex, TrackInfo, VideoFrame,
-};
+use crate::media::{AudioFrame, Frame, Packet, TrackIndex, TrackInfo, VideoFrame};
 use crate::timestamp::Timestamp;
 
 // ---------------------------------------------------------------------------
@@ -220,7 +218,7 @@ mod tests {
                 height: 1080,
                 pixel_format: Some(PixelFormat::Yuv420p),
                 color_space: Some(ColorSpace::BT709),
-                frame_rate: Some(30.0),
+                frame_rate: Some(FrameRate::new(30, 1)),
             }),
             audio: None,
         };
@@ -271,7 +269,9 @@ mod tests {
         assert!(demuxer.read_packet().unwrap().is_none());
 
         // WHEN — seek back
-        demuxer.seek(Timestamp::new(0, 30), SeekMode::Keyframe).unwrap();
+        demuxer
+            .seek(Timestamp::new(0, 30), SeekMode::Keyframe)
+            .unwrap();
 
         // THEN — can read again
         assert!(demuxer.read_packet().unwrap().is_some());

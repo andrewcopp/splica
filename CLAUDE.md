@@ -165,6 +165,10 @@ fn transcode(demuxer: &mut Mp4Demuxer, encoder: &mut H264Encoder) -> Result<()>
 
 Many small structs that each do one thing, not a few god structs. A `TrackInfo` holds metadata. A `Packet` holds compressed data. A `Timestamp` handles time math. They don't know about each other's internals.
 
+### Size is a smell
+
+A file over 300 lines or a function over 30 lines is a signal to stop and reevaluate. Large files usually mean multiple responsibilities got bundled together — split them into focused modules. Long functions usually mean multiple steps got inlined — extract them into named helper functions that each do one thing. Treat these thresholds as triggers to rethink structure, not hard limits to game with compression tricks.
+
 ### Explicit over implicit
 
 No global mutable state. No lazy_static configuration. No implicit initialization. If a function needs a codec registry, it takes one as a parameter. If a pipeline needs a thread pool, it's passed in at construction.
