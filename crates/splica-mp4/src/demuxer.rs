@@ -52,6 +52,19 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
         &self.metadata_boxes
     }
 
+    /// Returns the codec configuration for a given track index.
+    ///
+    /// Needed for stream-copy muxing where the muxer needs the raw codec
+    /// configuration (avcC, esds, etc.) to write sample description boxes.
+    pub fn codec_config(&self, track: TrackIndex) -> Option<&stsd::CodecConfig> {
+        self.mp4_tracks.get(track.0 as usize).map(|t| &t.codec_config)
+    }
+
+    /// Returns the media timescale for a given track index.
+    pub fn track_timescale(&self, track: TrackIndex) -> Option<u32> {
+        self.mp4_tracks.get(track.0 as usize).map(|t| t.timescale)
+    }
+
     /// Opens an MP4 file with a resource budget.
     ///
     /// The budget limits how many bytes can be buffered (moov box + sample

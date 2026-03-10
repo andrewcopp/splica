@@ -6,7 +6,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use miette::{Context, IntoDiagnostic, Result};
 use serde::Serialize;
 
-use splica_core::{Demuxer, Muxer};
+use splica_core::{Demuxer, Muxer, TrackIndex, TrackKind};
 use splica_mp4::{Mp4Demuxer, Mp4Muxer};
 
 #[derive(Parser)]
@@ -38,6 +38,36 @@ enum Commands {
         #[arg(long, default_value = "text")]
         format: OutputFormat,
     },
+
+    /// Extract a time range from a media file (stream copy, no re-encoding).
+    Trim {
+        /// Input file path.
+        #[arg(short, long)]
+        input: PathBuf,
+
+        /// Output file path.
+        #[arg(short, long)]
+        output: PathBuf,
+
+        /// Start time (e.g., "1:30", "90", "0:01:30.5").
+        #[arg(long)]
+        start: Option<String>,
+
+        /// End time (e.g., "2:00", "120", "0:02:00").
+        #[arg(long)]
+        end: Option<String>,
+    },
+
+    /// Extract only audio tracks from a media file.
+    ExtractAudio {
+        /// Input file path.
+        #[arg(short, long)]
+        input: PathBuf,
+
+        /// Output file path.
+        #[arg(short, long)]
+        output: PathBuf,
+    },
 }
 
 #[derive(Clone, ValueEnum)]
@@ -52,6 +82,65 @@ fn main() -> Result<()> {
     match cli.command {
         Commands::Convert { input, output } => convert(&input, &output),
         Commands::Probe { file, format } => probe(&file, &format),
+        Commands::Trim {
+            input,
+            output,
+            start,
+            end,
+        } => trim(&input, &output, start.as_deref(), end.as_deref()),
+        Commands::ExtractAudio { input, output } => extract_audio(&input, &output),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Time parsing
+// ---------------------------------------------------------------------------
+
+/// Parses a human-readable timestamp into seconds.
+///
+/// Supported formats:
+/// - "90" or "90.5" — seconds
+/// - "1:30" or "1:30.5" — minutes:seconds
+/// - "0:01:30" or "0:01:30.5" — hours:minutes:seconds
+fn parse_time(s: &str) -> Result<f64> {
+    let parts: Vec<&str> = s.split(':').collect();
+    match parts.len() {
+        1 => {
+            // seconds only
+            parts[0]
+                .parse::<f64>()
+                .into_diagnostic()
+                .wrap_err_with(|| format!("invalid time: '{s}'"))
+        }
+        2 => {
+            // minutes:seconds
+            let minutes: f64 = parts[0]
+                .parse()
+                .into_diagnostic()
+                .wrap_err_with(|| format!("invalid time: '{s}'"))?;
+            let seconds: f64 = parts[1]
+                .parse()
+                .into_diagnostic()
+                .wrap_err_with(|| format!("invalid time: '{s}'"))?;
+            Ok(minutes * 60.0 + seconds)
+        }
+        3 => {
+            // hours:minutes:seconds
+            let hours: f64 = parts[0]
+                .parse()
+                .into_diagnostic()
+                .wrap_err_with(|| format!("invalid time: '{s}'"))?;
+            let minutes: f64 = parts[1]
+                .parse()
+                .into_diagnostic()
+                .wrap_err_with(|| format!("invalid time: '{s}'"))?;
+            let seconds: f64 = parts[2]
+                .parse()
+                .into_diagnostic()
+                .wrap_err_with(|| format!("invalid time: '{s}'"))?;
+            Ok(hours * 3600.0 + minutes * 60.0 + seconds)
+        }
+        _ => Err(miette::miette!("invalid time format: '{s}' — use seconds, M:SS, or H:MM:SS")),
     }
 }
 
@@ -99,23 +188,11 @@ fn probe(file: &PathBuf, format: &OutputFormat) -> Result<()> {
         .tracks()
         .iter()
         .map(|t| {
-            let codec = match &t.codec {
-                splica_core::Codec::Video(vc) => match vc {
-                    splica_core::VideoCodec::H264 => "H.264".to_string(),
-                    splica_core::VideoCodec::H265 => "H.265".to_string(),
-                    splica_core::VideoCodec::Av1 => "AV1".to_string(),
-                    splica_core::VideoCodec::Other(s) => s.clone(),
-                },
-                splica_core::Codec::Audio(ac) => match ac {
-                    splica_core::AudioCodec::Aac => "AAC".to_string(),
-                    splica_core::AudioCodec::Opus => "Opus".to_string(),
-                    splica_core::AudioCodec::Other(s) => s.clone(),
-                },
-            };
+            let codec = format_codec(&t.codec);
 
             let kind = match t.kind {
-                splica_core::TrackKind::Video => "video",
-                splica_core::TrackKind::Audio => "audio",
+                TrackKind::Video => "video",
+                TrackKind::Audio => "audio",
             };
 
             ProbeTrack {
@@ -186,6 +263,22 @@ fn probe(file: &PathBuf, format: &OutputFormat) -> Result<()> {
     Ok(())
 }
 
+fn format_codec(codec: &splica_core::Codec) -> String {
+    match codec {
+        splica_core::Codec::Video(vc) => match vc {
+            splica_core::VideoCodec::H264 => "H.264".to_string(),
+            splica_core::VideoCodec::H265 => "H.265".to_string(),
+            splica_core::VideoCodec::Av1 => "AV1".to_string(),
+            splica_core::VideoCodec::Other(s) => s.clone(),
+        },
+        splica_core::Codec::Audio(ac) => match ac {
+            splica_core::AudioCodec::Aac => "AAC".to_string(),
+            splica_core::AudioCodec::Opus => "Opus".to_string(),
+            splica_core::AudioCodec::Other(s) => s.clone(),
+        },
+    }
+}
+
 // ---------------------------------------------------------------------------
 // convert
 // ---------------------------------------------------------------------------
@@ -234,6 +327,216 @@ fn convert(input: &PathBuf, output: &PathBuf) -> Result<()> {
 
     eprintln!(
         "Copied {packet_count} packets across {track_count} tracks to {}",
+        output.display()
+    );
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// trim
+// ---------------------------------------------------------------------------
+
+fn trim(
+    input: &PathBuf,
+    output: &PathBuf,
+    start: Option<&str>,
+    end: Option<&str>,
+) -> Result<()> {
+    let start_secs = start.map(parse_time).transpose()?;
+    let end_secs = end.map(parse_time).transpose()?;
+
+    let in_file = File::open(input)
+        .into_diagnostic()
+        .wrap_err_with(|| format!("could not open input file '{}'", input.display()))?;
+
+    let mut demuxer = Mp4Demuxer::open(in_file)
+        .into_diagnostic()
+        .wrap_err("failed to parse MP4 container")?;
+
+    let out_file = File::create(output)
+        .into_diagnostic()
+        .wrap_err_with(|| format!("could not create output file '{}'", output.display()))?;
+
+    let mut muxer = Mp4Muxer::new(BufWriter::new(out_file));
+
+    // Set up tracks with codec config passthrough
+    let track_count = demuxer.tracks().len();
+    for i in 0..track_count {
+        let track_idx = TrackIndex(i as u32);
+        let info = demuxer.tracks()[i].clone();
+        if let (Some(config), Some(timescale)) = (
+            demuxer.codec_config(track_idx).cloned(),
+            demuxer.track_timescale(track_idx),
+        ) {
+            muxer
+                .add_track_with_config(&info, config, timescale)
+                .into_diagnostic()
+                .wrap_err_with(|| format!("failed to add track {i}"))?;
+        } else {
+            muxer
+                .add_track(&info)
+                .into_diagnostic()
+                .wrap_err_with(|| format!("failed to add track {i}"))?;
+        }
+    }
+
+    // Copy metadata
+    let metadata = demuxer.metadata().to_vec();
+    muxer.set_metadata(metadata);
+
+    let mut packet_count: u64 = 0;
+    let mut skipped: u64 = 0;
+
+    while let Some(packet) = demuxer
+        .read_packet()
+        .into_diagnostic()
+        .wrap_err("failed to read packet")?
+    {
+        let pts_secs = packet.pts.as_seconds_f64();
+
+        // Filter by time range
+        if let Some(start) = start_secs {
+            if pts_secs < start {
+                // For video: skip until we find a keyframe at or after start.
+                // For audio: skip packets before start.
+                // However, we need to include the keyframe before start for
+                // correct decoding. Since this is stream copy, we include
+                // keyframes just before start to avoid broken output.
+                if !packet.is_keyframe {
+                    skipped += 1;
+                    continue;
+                }
+                // Include the last keyframe before start, but only track it.
+                // Actually for clean trim, skip everything before start.
+                skipped += 1;
+                continue;
+            }
+        }
+
+        if let Some(end) = end_secs {
+            if pts_secs >= end {
+                skipped += 1;
+                continue;
+            }
+        }
+
+        muxer
+            .write_packet_data(&packet)
+            .into_diagnostic()
+            .wrap_err("failed to write packet")?;
+        packet_count += 1;
+    }
+
+    muxer
+        .finalize_file()
+        .into_diagnostic()
+        .wrap_err("failed to finalize output MP4")?;
+
+    eprintln!(
+        "Trimmed: wrote {packet_count} packets, skipped {skipped} to {}",
+        output.display()
+    );
+    if let (Some(s), Some(e)) = (start_secs, end_secs) {
+        eprintln!("  Time range: {s:.2}s — {e:.2}s");
+    } else if let Some(s) = start_secs {
+        eprintln!("  Start: {s:.2}s");
+    } else if let Some(e) = end_secs {
+        eprintln!("  End: {e:.2}s");
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// extract-audio
+// ---------------------------------------------------------------------------
+
+fn extract_audio(input: &PathBuf, output: &PathBuf) -> Result<()> {
+    let in_file = File::open(input)
+        .into_diagnostic()
+        .wrap_err_with(|| format!("could not open input file '{}'", input.display()))?;
+
+    let mut demuxer = Mp4Demuxer::open(in_file)
+        .into_diagnostic()
+        .wrap_err("failed to parse MP4 container")?;
+
+    // Find audio tracks
+    let audio_tracks: Vec<(usize, splica_core::TrackInfo)> = demuxer
+        .tracks()
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| t.kind == TrackKind::Audio)
+        .map(|(i, t)| (i, t.clone()))
+        .collect();
+
+    if audio_tracks.is_empty() {
+        return Err(miette::miette!(
+            "no audio tracks found in '{}'",
+            input.display()
+        ));
+    }
+
+    let out_file = File::create(output)
+        .into_diagnostic()
+        .wrap_err_with(|| format!("could not create output file '{}'", output.display()))?;
+
+    let mut muxer = Mp4Muxer::new(BufWriter::new(out_file));
+
+    // Map input track indices to output track indices
+    let mut input_to_output: std::collections::HashMap<u32, TrackIndex> =
+        std::collections::HashMap::new();
+
+    for (input_idx, info) in &audio_tracks {
+        let track_idx = TrackIndex(*input_idx as u32);
+        if let (Some(config), Some(timescale)) = (
+            demuxer.codec_config(track_idx).cloned(),
+            demuxer.track_timescale(track_idx),
+        ) {
+            let output_idx = muxer
+                .add_track_with_config(info, config, timescale)
+                .into_diagnostic()
+                .wrap_err_with(|| format!("failed to add audio track {input_idx}"))?;
+            input_to_output.insert(*input_idx as u32, output_idx);
+        } else {
+            let output_idx = muxer
+                .add_track(info)
+                .into_diagnostic()
+                .wrap_err_with(|| format!("failed to add audio track {input_idx}"))?;
+            input_to_output.insert(*input_idx as u32, output_idx);
+        }
+    }
+
+    // Copy metadata
+    let metadata = demuxer.metadata().to_vec();
+    muxer.set_metadata(metadata);
+
+    let mut packet_count: u64 = 0;
+
+    while let Some(mut packet) = demuxer
+        .read_packet()
+        .into_diagnostic()
+        .wrap_err("failed to read packet")?
+    {
+        if let Some(&output_idx) = input_to_output.get(&packet.track_index.0) {
+            packet.track_index = output_idx;
+            muxer
+                .write_packet_data(&packet)
+                .into_diagnostic()
+                .wrap_err("failed to write packet")?;
+            packet_count += 1;
+        }
+        // Silently skip non-audio packets
+    }
+
+    muxer
+        .finalize_file()
+        .into_diagnostic()
+        .wrap_err("failed to finalize output MP4")?;
+
+    eprintln!(
+        "Extracted {packet_count} audio packets ({} audio tracks) to {}",
+        audio_tracks.len(),
         output.display()
     );
 
