@@ -140,7 +140,9 @@ fn parse_time(s: &str) -> Result<f64> {
                 .wrap_err_with(|| format!("invalid time: '{s}'"))?;
             Ok(hours * 3600.0 + minutes * 60.0 + seconds)
         }
-        _ => Err(miette::miette!("invalid time format: '{s}' — use seconds, M:SS, or H:MM:SS")),
+        _ => Err(miette::miette!(
+            "invalid time format: '{s}' — use seconds, M:SS, or H:MM:SS"
+        )),
     }
 }
 
@@ -337,12 +339,7 @@ fn convert(input: &PathBuf, output: &PathBuf) -> Result<()> {
 // trim
 // ---------------------------------------------------------------------------
 
-fn trim(
-    input: &PathBuf,
-    output: &PathBuf,
-    start: Option<&str>,
-    end: Option<&str>,
-) -> Result<()> {
+fn trim(input: &PathBuf, output: &PathBuf, start: Option<&str>, end: Option<&str>) -> Result<()> {
     let start_secs = start.map(parse_time).transpose()?;
     let end_secs = end.map(parse_time).transpose()?;
 

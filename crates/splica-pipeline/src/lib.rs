@@ -97,11 +97,7 @@ impl<F: Fn(PipelineEvent)> PipelineBuilder<F> {
     /// Registers a decoder for a specific track.
     ///
     /// Tracks without a decoder will be passed through in copy mode.
-    pub fn with_decoder(
-        mut self,
-        track: TrackIndex,
-        decoder: impl Decoder + 'static,
-    ) -> Self {
+    pub fn with_decoder(mut self, track: TrackIndex, decoder: impl Decoder + 'static) -> Self {
         self.decoders.insert(track, Box::new(decoder));
         self
     }
@@ -109,11 +105,7 @@ impl<F: Fn(PipelineEvent)> PipelineBuilder<F> {
     /// Registers an encoder for a specific track.
     ///
     /// Must be paired with a decoder for the same track.
-    pub fn with_encoder(
-        mut self,
-        track: TrackIndex,
-        encoder: impl Encoder + 'static,
-    ) -> Self {
+    pub fn with_encoder(mut self, track: TrackIndex, encoder: impl Encoder + 'static) -> Self {
         self.encoders.insert(track, Box::new(encoder));
         self
     }
@@ -207,9 +199,12 @@ fn drain_decoder_to_muxer<F: Fn(PipelineEvent)>(
 ) -> Result<(), PipelineError> {
     while let Some(frame) = decoder.receive_frame()? {
         counters.frames_decoded += 1;
-        emit_event(on_event, PipelineEventKind::FramesDecoded {
-            count: counters.frames_decoded,
-        });
+        emit_event(
+            on_event,
+            PipelineEventKind::FramesDecoded {
+                count: counters.frames_decoded,
+            },
+        );
 
         encoder.send_frame(Some(&frame))?;
         drain_encoder_to_muxer(encoder, muxer, output_track, on_event, counters)?;
@@ -227,16 +222,22 @@ fn drain_encoder_to_muxer<F: Fn(PipelineEvent)>(
 ) -> Result<(), PipelineError> {
     while let Some(mut encoded_packet) = encoder.receive_packet()? {
         counters.frames_encoded += 1;
-        emit_event(on_event, PipelineEventKind::FramesEncoded {
-            count: counters.frames_encoded,
-        });
+        emit_event(
+            on_event,
+            PipelineEventKind::FramesEncoded {
+                count: counters.frames_encoded,
+            },
+        );
 
         encoded_packet.track_index = output_track;
         muxer.write_packet(&encoded_packet)?;
         counters.packets_written += 1;
-        emit_event(on_event, PipelineEventKind::PacketsWritten {
-            count: counters.packets_written,
-        });
+        emit_event(
+            on_event,
+            PipelineEventKind::PacketsWritten {
+                count: counters.packets_written,
+            },
+        );
     }
     Ok(())
 }
@@ -273,19 +274,24 @@ impl<F: Fn(PipelineEvent)> Pipeline<F> {
         // Main demux loop
         while let Some(packet) = self.demuxer.read_packet()? {
             counters.packets_read += 1;
-            emit_event(&self.on_event, PipelineEventKind::PacketsRead {
-                count: counters.packets_read,
-            });
+            emit_event(
+                &self.on_event,
+                PipelineEventKind::PacketsRead {
+                    count: counters.packets_read,
+                },
+            );
 
             let input_track = packet.track_index;
-            let output_track = input_to_output.get(&input_track).copied().ok_or(
-                PipelineError::Config {
-                    message: format!(
-                        "packet references track {} which was not in demuxer tracks",
-                        input_track.0
-                    ),
-                },
-            )?;
+            let output_track =
+                input_to_output
+                    .get(&input_track)
+                    .copied()
+                    .ok_or(PipelineError::Config {
+                        message: format!(
+                            "packet references track {} which was not in demuxer tracks",
+                            input_track.0
+                        ),
+                    })?;
 
             match self.track_modes.get_mut(&input_track) {
                 Some(TrackMode::Transcode { decoder, encoder }) => {
@@ -305,9 +311,12 @@ impl<F: Fn(PipelineEvent)> Pipeline<F> {
                     out_packet.track_index = output_track;
                     self.muxer.write_packet(&out_packet)?;
                     counters.packets_written += 1;
-                    emit_event(&self.on_event, PipelineEventKind::PacketsWritten {
-                        count: counters.packets_written,
-                    });
+                    emit_event(
+                        &self.on_event,
+                        PipelineEventKind::PacketsWritten {
+                            count: counters.packets_written,
+                        },
+                    );
                 }
             }
         }
@@ -352,12 +361,12 @@ impl<F: Fn(PipelineEvent)> Pipeline<F> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use splica_core::{
-        ColorSpace, DecodeError, DemuxError, EncodeError, Frame, MuxError, Packet, PixelFormat,
-        PlaneLayout, Timestamp, TrackInfo, TrackKind, VideoCodec, VideoFrame, VideoTrackInfo,
-        Codec, FrameRate,
-    };
     use bytes::Bytes;
+    use splica_core::{
+        Codec, ColorSpace, DecodeError, DemuxError, EncodeError, Frame, FrameRate, MuxError,
+        Packet, PixelFormat, PlaneLayout, Timestamp, TrackInfo, TrackKind, VideoCodec, VideoFrame,
+        VideoTrackInfo,
+    };
     use std::any::Any;
     use std::sync::{Arc, Mutex};
 
@@ -413,9 +422,24 @@ mod tests {
                         p.pts,
                         Bytes::from(vec![0u8; 6]), // Y(1) + U(1) + V(1) padded
                         vec![
-                            PlaneLayout { offset: 0, stride: 1, width: 1, height: 1 },
-                            PlaneLayout { offset: 1, stride: 1, width: 1, height: 1 },
-                            PlaneLayout { offset: 2, stride: 1, width: 1, height: 1 },
+                            PlaneLayout {
+                                offset: 0,
+                                stride: 1,
+                                width: 1,
+                                height: 1,
+                            },
+                            PlaneLayout {
+                                offset: 1,
+                                stride: 1,
+                                width: 1,
+                                height: 1,
+                            },
+                            PlaneLayout {
+                                offset: 2,
+                                stride: 1,
+                                width: 1,
+                                height: 1,
+                            },
                         ],
                     )
                     .expect("valid test frame"),
@@ -434,8 +458,12 @@ mod tests {
             }
         }
 
-        fn as_any(&self) -> &dyn Any { self }
-        fn as_any_mut(&mut self) -> &mut dyn Any { self }
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+        fn as_any_mut(&mut self) -> &mut dyn Any {
+            self
+        }
     }
 
     /// A mock encoder that produces one packet per frame.
@@ -478,8 +506,12 @@ mod tests {
             }
         }
 
-        fn as_any(&self) -> &dyn Any { self }
-        fn as_any_mut(&mut self) -> &mut dyn Any { self }
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+        fn as_any_mut(&mut self) -> &mut dyn Any {
+            self
+        }
     }
 
     /// A muxer that records what it receives via shared state.
@@ -734,10 +766,18 @@ mod tests {
 
         // THEN
         let collected = events.lock().unwrap();
-        assert!(collected.iter().any(|k| matches!(k, PipelineEventKind::PacketsRead { .. })));
-        assert!(collected.iter().any(|k| matches!(k, PipelineEventKind::FramesDecoded { .. })));
-        assert!(collected.iter().any(|k| matches!(k, PipelineEventKind::FramesEncoded { .. })));
-        assert!(collected.iter().any(|k| matches!(k, PipelineEventKind::PacketsWritten { .. })));
+        assert!(collected
+            .iter()
+            .any(|k| matches!(k, PipelineEventKind::PacketsRead { .. })));
+        assert!(collected
+            .iter()
+            .any(|k| matches!(k, PipelineEventKind::FramesDecoded { .. })));
+        assert!(collected
+            .iter()
+            .any(|k| matches!(k, PipelineEventKind::FramesEncoded { .. })));
+        assert!(collected
+            .iter()
+            .any(|k| matches!(k, PipelineEventKind::PacketsWritten { .. })));
     }
 
     #[test]
