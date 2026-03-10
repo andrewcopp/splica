@@ -8,9 +8,10 @@
 
 use std::io::{Seek, SeekFrom, Write};
 
-use splica_core::{MuxError, Muxer, Packet, TrackIndex, TrackInfo, TrackKind};
+use splica_core::{MuxError, Muxer, Packet, ResourceBudget, TrackIndex, TrackInfo, TrackKind};
 
 use crate::boxes::stsd::CodecConfig;
+use crate::metadata::MetadataBox;
 
 /// Collected metadata for one track during muxing.
 struct MuxTrack {
@@ -31,6 +32,14 @@ pub struct Mp4Muxer<W> {
     mdat_pos: u64,
     /// Whether ftyp+mdat header have been written.
     header_written: bool,
+    /// Optional resource limits.
+    budget: Option<ResourceBudget>,
+    /// Running count of bytes written to mdat.
+    bytes_written: u64,
+    /// Running count of packets written.
+    packets_written: u64,
+    /// Opaque metadata boxes to write into moov.
+    metadata_boxes: Vec<MetadataBox>,
 }
 
 impl<W: Write + Seek> Mp4Muxer<W> {
@@ -42,7 +51,38 @@ impl<W: Write + Seek> Mp4Muxer<W> {
             mdat_body_start: 0,
             mdat_pos: 0,
             header_written: false,
+            budget: None,
+            bytes_written: 0,
+            packets_written: 0,
+            metadata_boxes: Vec::new(),
         }
+    }
+
+    /// Creates a new MP4 muxer with a resource budget.
+    ///
+    /// The budget limits how many bytes and packets can be written.
+    /// Exceeding either limit returns `MuxError::ResourceExhausted`
+    /// before the write occurs.
+    pub fn new_with_budget(writer: W, budget: ResourceBudget) -> Self {
+        Self {
+            writer,
+            tracks: Vec::new(),
+            mdat_body_start: 0,
+            mdat_pos: 0,
+            header_written: false,
+            budget: Some(budget),
+            bytes_written: 0,
+            packets_written: 0,
+            metadata_boxes: Vec::new(),
+        }
+    }
+
+    /// Sets metadata boxes to include in the output moov container.
+    ///
+    /// Typically called with the result of `Mp4Demuxer::metadata()` for
+    /// lossless metadata passthrough.
+    pub fn set_metadata(&mut self, boxes: Vec<MetadataBox>) {
+        self.metadata_boxes = boxes;
     }
 
     /// Registers a track with full codec configuration (for passthrough muxing).
@@ -98,11 +138,35 @@ impl<W: Write + Seek> Mp4Muxer<W> {
             });
         }
 
-        let offset = self.mdat_pos;
+        // Check budget before writing
         let size = packet.data.len() as u32;
+        if let Some(budget) = &self.budget {
+            if self.bytes_written + size as u64 > budget.max_bytes {
+                return Err(MuxError::ResourceExhausted {
+                    message: format!(
+                        "writing {} bytes would exceed byte budget ({} + {} > {})",
+                        size, self.bytes_written, size, budget.max_bytes
+                    ),
+                });
+            }
+            if let Some(max_frames) = budget.max_frames {
+                if self.packets_written + 1 > max_frames {
+                    return Err(MuxError::ResourceExhausted {
+                        message: format!(
+                            "writing packet would exceed frame budget ({} >= {})",
+                            self.packets_written, max_frames
+                        ),
+                    });
+                }
+            }
+        }
+
+        let offset = self.mdat_pos;
 
         self.writer.write_all(&packet.data).map_err(io_err)?;
         self.mdat_pos += size as u64;
+        self.bytes_written += size as u64;
+        self.packets_written += 1;
 
         let dts_ticks = packet.dts.ticks();
         let cts_offset = (packet.pts.ticks() - packet.dts.ticks()) as i32;
@@ -179,6 +243,12 @@ impl<W: Write + Seek> Mp4Muxer<W> {
 
         let mut moov_body = mvhd;
         moov_body.extend_from_slice(&trak_boxes);
+
+        // Append opaque metadata boxes (udta, meta, etc.)
+        for meta_box in &self.metadata_boxes {
+            moov_body.extend_from_slice(&meta_box.data);
+        }
+
         Ok(make_box(b"moov", &moov_body))
     }
 

@@ -28,4 +28,6 @@ splica-pipeline = { path = "crates/splica-pipeline" }
 splica-cli = { path = "crates/splica-cli" }
 
 bytes = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 thiserror = "2"

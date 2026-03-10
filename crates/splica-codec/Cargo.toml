@@ -7,5 +7,11 @@ license.workspace = true
 repository.workspace = true
 description = "Codec trait implementations and FFI wrappers for the splica media processing library"
 
+[features]
+codec-h264 = ["dep:openh264"]
+
 [dependencies]
 splica-core.workspace = true
+bytes.workspace = true
+thiserror.workspace = true
+openh264 = { version = "0.9", optional = true }

@@ -4,6 +4,8 @@
 //! plus seeking capability. I/O parameterization lives on the implementing struct, not the trait,
 //! keeping traits object-safe.
 
+use std::any::Any;
+
 use crate::error::{DecodeError, DemuxError, EncodeError, FilterError, MuxError};
 use crate::media::{AudioFrame, Frame, Packet, TrackIndex, TrackInfo, VideoFrame};
 use crate::timestamp::Timestamp;
@@ -71,6 +73,26 @@ pub trait Seekable {
 ///
 /// Uses the send/receive pattern to handle codecs that buffer multiple packets
 /// before producing output (e.g., B-frame reordering, codec lookahead).
+///
+/// # Codec-specific parameters
+///
+/// The `Decoder` trait abstracts away codec details for generic pipeline use.
+/// When you need codec-specific access (e.g., H.264 profile/level, reference
+/// frame count), downcast via [`as_any()`](Decoder::as_any):
+///
+/// ```ignore
+/// use splica_codec::H264Decoder;
+///
+/// fn inspect_decoder(decoder: &dyn Decoder) {
+///     if let Some(h264) = decoder.as_any().downcast_ref::<H264Decoder>() {
+///         let config = h264.codec_config();
+///         println!("H.264 profile: {:?}, level: {:?}", config.profile, config.level);
+///     }
+/// }
+/// ```
+///
+/// This pattern preserves object safety while giving power users (like Marcus
+/// for video editing or Elena for broadcast compliance) access to codec internals.
 pub trait Decoder {
     /// Sends a compressed packet to the decoder.
     ///
@@ -81,6 +103,15 @@ pub trait Decoder {
     ///
     /// Returns `Ok(None)` when no more frames are available (call `send_packet` again).
     fn receive_frame(&mut self) -> Result<Option<Frame>, DecodeError>;
+
+    /// Returns a reference to the concrete decoder type for downcasting.
+    ///
+    /// Used to access codec-specific parameters that the generic `Decoder`
+    /// trait intentionally doesn't expose.
+    fn as_any(&self) -> &dyn Any;
+
+    /// Returns a mutable reference to the concrete decoder type for downcasting.
+    fn as_any_mut(&mut self) -> &mut dyn Any;
 }
 
 // ---------------------------------------------------------------------------
@@ -90,6 +121,10 @@ pub trait Decoder {
 /// Compresses raw frames into packets.
 ///
 /// Uses the send/receive pattern to handle encoders with lookahead buffers.
+///
+/// Codec-specific configuration (bitrate, profile, etc.) is set on the concrete
+/// encoder type at construction time. Use [`as_any()`](Encoder::as_any) to
+/// downcast and inspect codec-specific state at runtime.
 pub trait Encoder {
     /// Sends a raw frame to the encoder.
     ///
@@ -100,6 +135,12 @@ pub trait Encoder {
     ///
     /// Returns `Ok(None)` when no more packets are available (call `send_frame` again).
     fn receive_packet(&mut self) -> Result<Option<Packet>, EncodeError>;
+
+    /// Returns a reference to the concrete encoder type for downcasting.
+    fn as_any(&self) -> &dyn Any;
+
+    /// Returns a mutable reference to the concrete encoder type for downcasting.
+    fn as_any_mut(&mut self) -> &mut dyn Any;
 }
 
 // ---------------------------------------------------------------------------

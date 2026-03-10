@@ -7,6 +7,11 @@ license.workspace = true
 repository.workspace = true
 description = "Shared types, traits, and error types for the splica media processing library"
 
+[features]
+serde = ["dep:serde", "dep:serde_json"]
+
 [dependencies]
 bytes.workspace = true
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
 thiserror.workspace = true

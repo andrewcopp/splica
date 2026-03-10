@@ -41,6 +41,8 @@ impl FourCC {
     pub const CO64: Self = Self(*b"co64");
     pub const STSS: Self = Self(*b"stss");
     pub const MDAT: Self = Self(*b"mdat");
+    pub const UDTA: Self = Self(*b"udta");
+    pub const META: Self = Self(*b"meta");
 }
 
 impl std::fmt::Debug for FourCC {

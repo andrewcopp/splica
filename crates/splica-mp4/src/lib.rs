@@ -6,13 +6,18 @@
 pub mod boxes;
 pub mod demuxer;
 pub mod error;
+pub mod fmp4_muxer;
 pub mod muxer;
 pub mod sample_table;
 pub(crate) mod track;
 
 pub use demuxer::Mp4Demuxer;
 pub use error::Mp4Error;
+pub use fmp4_muxer::{FragmentConfig, FragmentedMp4Muxer};
+pub use metadata::MetadataBox;
 pub use muxer::Mp4Muxer;
+
+pub mod metadata;
 
 #[cfg(feature = "wasm")]
 pub mod wasm;

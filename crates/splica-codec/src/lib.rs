@@ -40,3 +40,14 @@
 //! browser use cases that only need demuxing/remuxing (no transcode),
 //! codec crates should not be linked — the `splica-mp4` demuxer alone
 //! should compile to <100KB wasm.
+
+pub mod error;
+pub mod h264;
+
+#[cfg(feature = "codec-h264")]
+pub use h264::{H264Decoder, H264DecoderConfig, H264Profile};
+
+#[cfg(feature = "codec-h264")]
+pub use h264::{
+    H264Encoder, H264EncoderBuilder, H264EncoderConfig, H264EncoderLevel, H264EncoderProfile,
+};

@@ -13,6 +13,7 @@ use crate::boxes::{
     FourCC,
 };
 use crate::error::Mp4Error;
+use crate::metadata::MetadataBox;
 use crate::sample_table;
 use crate::track::Mp4Track;
 
@@ -31,6 +32,8 @@ pub struct Mp4Demuxer<R> {
     bytes_read: u64,
     /// Running count of packets read.
     packets_read: u64,
+    /// Opaque metadata boxes (udta, meta) from moov, preserved for passthrough.
+    metadata_boxes: Vec<MetadataBox>,
 }
 
 impl<R: Read + Seek> Mp4Demuxer<R> {
@@ -40,6 +43,13 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
     /// all tracks. The reader is then used for on-demand sample data reads.
     pub fn open(reader: R) -> Result<Self, Mp4Error> {
         Self::open_with_budget(reader, None)
+    }
+
+    /// Returns opaque metadata boxes (udta, meta) extracted from the moov container.
+    ///
+    /// These can be passed to `Mp4Muxer::set_metadata` for lossless round-tripping.
+    pub fn metadata(&self) -> &[MetadataBox] {
+        &self.metadata_boxes
     }
 
     /// Opens an MP4 file with a resource budget.
@@ -140,30 +150,55 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
 
         let moov = moov_data.ok_or(Mp4Error::MissingBox { name: "moov" })?;
 
-        // Parse tracks from moov
+        // Parse tracks and metadata from moov
         let mvhd_box = require_box(&moov, FourCC::MVHD, 0, "mvhd")?;
         let movie_header = mvhd::parse_mvhd(mvhd_box.body, mvhd_box.offset)?;
 
         let mut mp4_tracks = Vec::new();
+        let mut metadata_boxes = Vec::new();
 
-        for trak_result in boxes::iter_boxes(&moov, 0) {
-            let trak = trak_result?;
-            if trak.header.box_type != FourCC::TRAK {
-                continue;
-            }
-
-            match parse_track(trak.body, trak.offset, &movie_header) {
-                Ok(track) => {
-                    // Only keep video and audio tracks
-                    if track.is_video() || track.is_audio() {
-                        mp4_tracks.push(track);
+        for box_result in boxes::iter_boxes(&moov, 0) {
+            let parsed = box_result?;
+            match parsed.header.box_type {
+                FourCC::TRAK => {
+                    match parse_track(parsed.body, parsed.offset, &movie_header) {
+                        Ok(track) => {
+                            // Only keep video and audio tracks
+                            if track.is_video() || track.is_audio() {
+                                mp4_tracks.push(track);
+                            }
+                        }
+                        Err(Mp4Error::UnsupportedCodec { .. }) => {
+                            // Skip tracks with unsupported codecs rather than failing
+                            continue;
+                        }
+                        Err(e) => return Err(e),
                     }
                 }
-                Err(Mp4Error::UnsupportedCodec { .. }) => {
-                    // Skip tracks with unsupported codecs rather than failing
-                    continue;
+                FourCC::UDTA | FourCC::META => {
+                    // Preserve the complete box (header + body) as raw bytes
+                    let total_size = parsed.header.size as usize;
+                    let header_size = parsed.header.header_size as usize;
+                    let mut raw = Vec::with_capacity(total_size);
+                    // Reconstruct box header
+                    raw.extend_from_slice(&(total_size as u32).to_be_bytes());
+                    raw.extend_from_slice(&parsed.header.box_type.0);
+                    if header_size == 16 {
+                        // Extended size — shouldn't happen for small metadata, but handle it
+                        raw.clear();
+                        raw.extend_from_slice(&1u32.to_be_bytes());
+                        raw.extend_from_slice(&parsed.header.box_type.0);
+                        raw.extend_from_slice(&(total_size as u64).to_be_bytes());
+                    }
+                    raw.extend_from_slice(parsed.body);
+                    metadata_boxes.push(MetadataBox {
+                        box_type: parsed.header.box_type,
+                        data: raw,
+                    });
                 }
-                Err(e) => return Err(e),
+                _ => {
+                    // Skip mvhd (already parsed) and other boxes
+                }
             }
         }
 
@@ -194,6 +229,7 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
             budget,
             bytes_read: 0,
             packets_read: 0,
+            metadata_boxes,
         })
     }
 }

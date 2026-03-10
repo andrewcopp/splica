@@ -10,6 +10,8 @@ use std::fmt;
 /// Platform engineers (like Priya) match on this to decide whether to retry
 /// a failed operation or abort immediately.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
 pub enum ErrorKind {
     /// Input is malformed or invalid — retrying won't help.
     InvalidInput,
@@ -43,6 +45,32 @@ impl ErrorKind {
 }
 
 // ---------------------------------------------------------------------------
+// Serde helper: serializes any error type that has kind() and Display
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "serde")]
+mod serde_helpers {
+    use super::ErrorKind;
+    use serde::ser::{SerializeMap, Serializer};
+
+    /// Start a map with the common fields: variant, kind, is_retryable, message.
+    pub fn start_error_map<S: Serializer>(
+        serializer: S,
+        variant: &str,
+        kind: ErrorKind,
+        message: &str,
+        extra_fields: usize,
+    ) -> Result<S::SerializeMap, S::Error> {
+        let mut map = serializer.serialize_map(Some(4 + extra_fields))?;
+        map.serialize_entry("variant", variant)?;
+        map.serialize_entry("kind", &kind)?;
+        map.serialize_entry("is_retryable", &kind.is_retryable())?;
+        map.serialize_entry("message", message)?;
+        Ok(map)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // DemuxError
 // ---------------------------------------------------------------------------
 
@@ -72,6 +100,59 @@ impl DemuxError {
             Self::UnsupportedCodec { .. } => ErrorKind::UnsupportedFormat,
             Self::Io(_) => ErrorKind::Io,
             Self::Other(_) => ErrorKind::Internal,
+        }
+    }
+}
+
+#[cfg(feature = "serde")]
+impl serde::Serialize for DemuxError {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+
+        let msg = self.to_string();
+        match self {
+            Self::InvalidContainer { offset, .. } => {
+                let mut map = serde_helpers::start_error_map(
+                    serializer,
+                    "InvalidContainer",
+                    self.kind(),
+                    &msg,
+                    1,
+                )?;
+                map.serialize_entry("offset", offset)?;
+                map.end()
+            }
+            Self::UnsupportedCodec { codec } => {
+                let mut map = serde_helpers::start_error_map(
+                    serializer,
+                    "UnsupportedCodec",
+                    self.kind(),
+                    &msg,
+                    1,
+                )?;
+                map.serialize_entry("codec", codec)?;
+                map.end()
+            }
+            Self::UnexpectedEof { offset } => {
+                let mut map = serde_helpers::start_error_map(
+                    serializer,
+                    "UnexpectedEof",
+                    self.kind(),
+                    &msg,
+                    1,
+                )?;
+                map.serialize_entry("offset", offset)?;
+                map.end()
+            }
+            Self::Io(_) => {
+                let map = serde_helpers::start_error_map(serializer, "Io", self.kind(), &msg, 0)?;
+                map.end()
+            }
+            Self::Other(_) => {
+                let map =
+                    serde_helpers::start_error_map(serializer, "Other", self.kind(), &msg, 0)?;
+                map.end()
+            }
         }
     }
 }
@@ -111,6 +192,58 @@ impl DecodeError {
     }
 }
 
+#[cfg(feature = "serde")]
+impl serde::Serialize for DecodeError {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+
+        let msg = self.to_string();
+        match self {
+            Self::InvalidBitstream { .. } => {
+                let map = serde_helpers::start_error_map(
+                    serializer,
+                    "InvalidBitstream",
+                    self.kind(),
+                    &msg,
+                    0,
+                )?;
+                map.end()
+            }
+            Self::UnsupportedProfile { codec, profile } => {
+                let mut map = serde_helpers::start_error_map(
+                    serializer,
+                    "UnsupportedProfile",
+                    self.kind(),
+                    &msg,
+                    2,
+                )?;
+                map.serialize_entry("codec", codec)?;
+                map.serialize_entry("profile", profile)?;
+                map.end()
+            }
+            Self::ResourceExhausted { .. } => {
+                let map = serde_helpers::start_error_map(
+                    serializer,
+                    "ResourceExhausted",
+                    self.kind(),
+                    &msg,
+                    0,
+                )?;
+                map.end()
+            }
+            Self::Io(_) => {
+                let map = serde_helpers::start_error_map(serializer, "Io", self.kind(), &msg, 0)?;
+                map.end()
+            }
+            Self::Other(_) => {
+                let map =
+                    serde_helpers::start_error_map(serializer, "Other", self.kind(), &msg, 0)?;
+                map.end()
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // EncodeError
 // ---------------------------------------------------------------------------
@@ -146,6 +279,56 @@ impl EncodeError {
     }
 }
 
+#[cfg(feature = "serde")]
+impl serde::Serialize for EncodeError {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+
+        let msg = self.to_string();
+        match self {
+            Self::InvalidFrame { .. } => {
+                let map = serde_helpers::start_error_map(
+                    serializer,
+                    "InvalidFrame",
+                    self.kind(),
+                    &msg,
+                    0,
+                )?;
+                map.end()
+            }
+            Self::UnsupportedConfig { .. } => {
+                let map = serde_helpers::start_error_map(
+                    serializer,
+                    "UnsupportedConfig",
+                    self.kind(),
+                    &msg,
+                    0,
+                )?;
+                map.end()
+            }
+            Self::ResourceExhausted { .. } => {
+                let map = serde_helpers::start_error_map(
+                    serializer,
+                    "ResourceExhausted",
+                    self.kind(),
+                    &msg,
+                    0,
+                )?;
+                map.end()
+            }
+            Self::Io(_) => {
+                let map = serde_helpers::start_error_map(serializer, "Io", self.kind(), &msg, 0)?;
+                map.end()
+            }
+            Self::Other(_) => {
+                let map =
+                    serde_helpers::start_error_map(serializer, "Other", self.kind(), &msg, 0)?;
+                map.end()
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // MuxError
 // ---------------------------------------------------------------------------
@@ -159,6 +342,9 @@ pub enum MuxError {
     #[error("unsupported codec '{codec}' for container format '{container}'")]
     IncompatibleCodec { codec: String, container: String },
 
+    #[error("muxer resource exhausted: {message}")]
+    ResourceExhausted { message: String },
+
     #[error(transparent)]
     Io(#[from] std::io::Error),
 
@@ -171,8 +357,61 @@ impl MuxError {
         match self {
             Self::InvalidTrackConfig { .. } => ErrorKind::InvalidInput,
             Self::IncompatibleCodec { .. } => ErrorKind::UnsupportedFormat,
+            Self::ResourceExhausted { .. } => ErrorKind::ResourceExhausted,
             Self::Io(_) => ErrorKind::Io,
             Self::Other(_) => ErrorKind::Internal,
+        }
+    }
+}
+
+#[cfg(feature = "serde")]
+impl serde::Serialize for MuxError {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+
+        let msg = self.to_string();
+        match self {
+            Self::InvalidTrackConfig { .. } => {
+                let map = serde_helpers::start_error_map(
+                    serializer,
+                    "InvalidTrackConfig",
+                    self.kind(),
+                    &msg,
+                    0,
+                )?;
+                map.end()
+            }
+            Self::IncompatibleCodec { codec, container } => {
+                let mut map = serde_helpers::start_error_map(
+                    serializer,
+                    "IncompatibleCodec",
+                    self.kind(),
+                    &msg,
+                    2,
+                )?;
+                map.serialize_entry("codec", codec)?;
+                map.serialize_entry("container", container)?;
+                map.end()
+            }
+            Self::ResourceExhausted { .. } => {
+                let map = serde_helpers::start_error_map(
+                    serializer,
+                    "ResourceExhausted",
+                    self.kind(),
+                    &msg,
+                    0,
+                )?;
+                map.end()
+            }
+            Self::Io(_) => {
+                let map = serde_helpers::start_error_map(serializer, "Io", self.kind(), &msg, 0)?;
+                map.end()
+            }
+            Self::Other(_) => {
+                let map =
+                    serde_helpers::start_error_map(serializer, "Other", self.kind(), &msg, 0)?;
+                map.end()
+            }
         }
     }
 }
@@ -200,6 +439,42 @@ impl FilterError {
             Self::InvalidInput { .. } => ErrorKind::InvalidInput,
             Self::ResourceExhausted { .. } => ErrorKind::ResourceExhausted,
             Self::Other(_) => ErrorKind::Internal,
+        }
+    }
+}
+
+#[cfg(feature = "serde")]
+impl serde::Serialize for FilterError {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+
+        let msg = self.to_string();
+        match self {
+            Self::InvalidInput { .. } => {
+                let map = serde_helpers::start_error_map(
+                    serializer,
+                    "InvalidInput",
+                    self.kind(),
+                    &msg,
+                    0,
+                )?;
+                map.end()
+            }
+            Self::ResourceExhausted { .. } => {
+                let map = serde_helpers::start_error_map(
+                    serializer,
+                    "ResourceExhausted",
+                    self.kind(),
+                    &msg,
+                    0,
+                )?;
+                map.end()
+            }
+            Self::Other(_) => {
+                let map =
+                    serde_helpers::start_error_map(serializer, "Other", self.kind(), &msg, 0)?;
+                map.end()
+            }
         }
     }
 }
@@ -245,6 +520,57 @@ impl PipelineError {
             Self::Mux(e) => e.kind(),
             Self::Config { .. } => ErrorKind::InvalidInput,
             Self::Other(_) => ErrorKind::Internal,
+        }
+    }
+}
+
+#[cfg(feature = "serde")]
+impl serde::Serialize for PipelineError {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+
+        let msg = self.to_string();
+        match self {
+            Self::Demux(inner) => {
+                let mut map =
+                    serde_helpers::start_error_map(serializer, "Demux", self.kind(), &msg, 1)?;
+                map.serialize_entry("inner", inner)?;
+                map.end()
+            }
+            Self::Decode(inner) => {
+                let mut map =
+                    serde_helpers::start_error_map(serializer, "Decode", self.kind(), &msg, 1)?;
+                map.serialize_entry("inner", inner)?;
+                map.end()
+            }
+            Self::Filter(inner) => {
+                let mut map =
+                    serde_helpers::start_error_map(serializer, "Filter", self.kind(), &msg, 1)?;
+                map.serialize_entry("inner", inner)?;
+                map.end()
+            }
+            Self::Encode(inner) => {
+                let mut map =
+                    serde_helpers::start_error_map(serializer, "Encode", self.kind(), &msg, 1)?;
+                map.serialize_entry("inner", inner)?;
+                map.end()
+            }
+            Self::Mux(inner) => {
+                let mut map =
+                    serde_helpers::start_error_map(serializer, "Mux", self.kind(), &msg, 1)?;
+                map.serialize_entry("inner", inner)?;
+                map.end()
+            }
+            Self::Config { .. } => {
+                let map =
+                    serde_helpers::start_error_map(serializer, "Config", self.kind(), &msg, 0)?;
+                map.end()
+            }
+            Self::Other(_) => {
+                let map =
+                    serde_helpers::start_error_map(serializer, "Other", self.kind(), &msg, 0)?;
+                map.end()
+            }
         }
     }
 }
@@ -332,5 +658,67 @@ mod tests {
         // THEN
         assert_eq!(error.kind(), ErrorKind::Internal);
         assert_eq!(error.to_string(), "custom error");
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn test_that_demux_error_serializes_to_structured_json() {
+        // GIVEN
+        let error = DemuxError::InvalidContainer {
+            offset: 42,
+            message: "bad magic bytes".to_string(),
+        };
+
+        // WHEN
+        let json = serde_json::to_value(&error).unwrap();
+
+        // THEN
+        assert_eq!(json["variant"], "InvalidContainer");
+        assert_eq!(json["kind"], "invalid_input");
+        assert_eq!(json["is_retryable"], false);
+        assert_eq!(json["offset"], 42);
+        assert!(json["message"]
+            .as_str()
+            .unwrap()
+            .contains("bad magic bytes"));
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn test_that_mux_error_serializes_with_retryable_flag() {
+        // GIVEN
+        let error = MuxError::ResourceExhausted {
+            message: "byte budget exceeded".to_string(),
+        };
+
+        // WHEN
+        let json = serde_json::to_value(&error).unwrap();
+
+        // THEN
+        assert_eq!(json["variant"], "ResourceExhausted");
+        assert_eq!(json["kind"], "resource_exhausted");
+        assert_eq!(json["is_retryable"], true);
+        assert!(json["message"]
+            .as_str()
+            .unwrap()
+            .contains("byte budget exceeded"));
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn test_that_io_error_serializes_with_display_message() {
+        // GIVEN
+        let error = DemuxError::Io(std::io::Error::new(
+            std::io::ErrorKind::ConnectionReset,
+            "connection reset",
+        ));
+
+        // WHEN
+        let json = serde_json::to_value(&error).unwrap();
+
+        // THEN
+        assert_eq!(json["variant"], "Io");
+        assert_eq!(json["kind"], "io");
+        assert_eq!(json["is_retryable"], true);
     }
 }

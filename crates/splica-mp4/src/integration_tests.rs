@@ -233,3 +233,381 @@ fn test_that_muxer_produces_valid_mp4_from_demuxed_packets() {
     }
     assert_eq!(packet_count, 15); // 5 video + 10 audio
 }
+
+#[test]
+fn test_that_muxer_enforces_byte_budget() {
+    // GIVEN — demux a synthetic MP4 with 3 video samples
+    let original = test_helpers::build_test_mp4(&[TestTrack::video(320, 240, 3)]);
+    let mut demuxer = Mp4Demuxer::open(Cursor::new(original)).unwrap();
+    let tracks = demuxer.tracks().to_vec();
+
+    // Collect all packets
+    let mut packets = Vec::new();
+    while let Some(packet) = demuxer.read_packet().unwrap() {
+        packets.push(packet);
+    }
+    assert_eq!(packets.len(), 3);
+
+    // WHEN — mux with a byte budget that allows only 1 packet
+    let first_packet_size = packets[0].data.len() as u64;
+    let budget = ResourceBudget::new(first_packet_size + 1); // just enough for 1 packet
+
+    let mut output = Cursor::new(Vec::new());
+    let mut muxer = crate::muxer::Mp4Muxer::new_with_budget(&mut output, budget);
+    for track in &tracks {
+        muxer.add_track(track).unwrap();
+    }
+
+    // First packet should succeed
+    muxer.write_packet(&packets[0]).unwrap();
+
+    // THEN — second packet should fail with ResourceExhausted
+    let result = muxer.write_packet(&packets[1]);
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert_eq!(err.kind(), splica_core::ErrorKind::ResourceExhausted);
+}
+
+#[test]
+fn test_that_muxer_enforces_frame_budget() {
+    // GIVEN — demux a synthetic MP4 with 5 video samples
+    let original = test_helpers::build_test_mp4(&[TestTrack::video(320, 240, 5)]);
+    let mut demuxer = Mp4Demuxer::open(Cursor::new(original)).unwrap();
+    let tracks = demuxer.tracks().to_vec();
+
+    let mut packets = Vec::new();
+    while let Some(packet) = demuxer.read_packet().unwrap() {
+        packets.push(packet);
+    }
+    assert_eq!(packets.len(), 5);
+
+    // WHEN — mux with a frame budget of 2
+    let budget = ResourceBudget::new(u64::MAX).with_max_frames(2);
+
+    let mut output = Cursor::new(Vec::new());
+    let mut muxer = crate::muxer::Mp4Muxer::new_with_budget(&mut output, budget);
+    for track in &tracks {
+        muxer.add_track(track).unwrap();
+    }
+
+    // First two packets should succeed
+    muxer.write_packet(&packets[0]).unwrap();
+    muxer.write_packet(&packets[1]).unwrap();
+
+    // THEN — third packet should fail with ResourceExhausted
+    let result = muxer.write_packet(&packets[2]);
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert_eq!(err.kind(), splica_core::ErrorKind::ResourceExhausted);
+}
+
+#[test]
+fn test_that_metadata_round_trips_through_demux_mux() {
+    // GIVEN — an MP4 with a udta box containing custom data
+    let custom_data = b"splica-test-metadata-payload-12345";
+    let udta = test_helpers::build_udta(custom_data);
+    let base_mp4 = test_helpers::build_test_mp4(&[TestTrack::video(320, 240, 3)]);
+    let mp4_with_metadata = test_helpers::inject_moov_boxes(&base_mp4, &[&udta]);
+
+    // WHEN — demux, read metadata, remux with metadata
+    let mut demuxer = Mp4Demuxer::open(Cursor::new(mp4_with_metadata)).unwrap();
+    let metadata = demuxer.metadata().to_vec();
+
+    assert_eq!(metadata.len(), 1);
+    assert_eq!(metadata[0].box_type, crate::boxes::FourCC::UDTA);
+
+    let tracks = demuxer.tracks().to_vec();
+    let mut packets = Vec::new();
+    while let Some(packet) = demuxer.read_packet().unwrap() {
+        packets.push(packet);
+    }
+
+    let mut output = Cursor::new(Vec::new());
+    {
+        let mut muxer = crate::muxer::Mp4Muxer::new(&mut output);
+        muxer.set_metadata(metadata);
+        for track in &tracks {
+            muxer.add_track(track).unwrap();
+        }
+        for packet in &packets {
+            muxer.write_packet(packet).unwrap();
+        }
+        muxer.finalize().unwrap();
+    }
+
+    // THEN — re-demux and verify metadata is preserved
+    let output_data = output.into_inner();
+    let re_demuxer = Mp4Demuxer::open(Cursor::new(output_data)).unwrap();
+    let re_metadata = re_demuxer.metadata();
+
+    assert_eq!(re_metadata.len(), 1);
+    assert_eq!(re_metadata[0].box_type, crate::boxes::FourCC::UDTA);
+    // Verify the payload is preserved
+    assert!(
+        re_metadata[0]
+            .data
+            .windows(custom_data.len())
+            .any(|w| w == custom_data),
+        "custom metadata payload should be preserved in round-trip"
+    );
+}
+
+#[test]
+fn test_that_multiple_metadata_boxes_are_preserved() {
+    // GIVEN — an MP4 with both udta and meta boxes
+    let udta = test_helpers::build_udta(b"udta-payload");
+    let meta = test_helpers::build_meta(b"meta-payload");
+    let base_mp4 = test_helpers::build_test_mp4(&[TestTrack::video(320, 240, 2)]);
+    let mp4_with_metadata = test_helpers::inject_moov_boxes(&base_mp4, &[&udta, &meta]);
+
+    // WHEN
+    let demuxer = Mp4Demuxer::open(Cursor::new(mp4_with_metadata)).unwrap();
+    let metadata = demuxer.metadata();
+
+    // THEN
+    assert_eq!(metadata.len(), 2);
+    assert_eq!(metadata[0].box_type, crate::boxes::FourCC::UDTA);
+    assert_eq!(metadata[1].box_type, crate::boxes::FourCC::META);
+}
+
+#[test]
+fn test_that_fmp4_muxer_writes_ftyp_moov_moof_mdat_structure() {
+    // GIVEN — demux a synthetic MP4 with 1 video track (5 samples)
+    let original = test_helpers::build_test_mp4(&[TestTrack::video(640, 480, 5)]);
+    let mut demuxer = Mp4Demuxer::open(Cursor::new(original)).unwrap();
+    let original_tracks = demuxer.tracks().to_vec();
+
+    let mut packets = Vec::new();
+    while let Some(pkt) = demuxer.read_packet().unwrap() {
+        packets.push(pkt);
+    }
+
+    // WHEN — mux into fragmented MP4
+    let mut output = Vec::new();
+    {
+        let config = crate::fmp4_muxer::FragmentConfig {
+            max_samples_per_fragment: 2,
+        };
+        let mut muxer = crate::fmp4_muxer::FragmentedMp4Muxer::with_config(&mut output, config);
+        for track in &original_tracks {
+            muxer.add_track(track).unwrap();
+        }
+        for packet in &packets {
+            muxer.write_packet(packet).unwrap();
+        }
+        muxer.finalize().unwrap();
+    }
+
+    // THEN — verify the box structure: ftyp, moov (with mvex), then moof+mdat pairs
+    let mut box_types = Vec::new();
+    let mut pos = 0usize;
+    while pos + 8 <= output.len() {
+        let size = u32::from_be_bytes([
+            output[pos],
+            output[pos + 1],
+            output[pos + 2],
+            output[pos + 3],
+        ]) as usize;
+        let fourcc = [
+            output[pos + 4],
+            output[pos + 5],
+            output[pos + 6],
+            output[pos + 7],
+        ];
+        if size < 8 || pos + size > output.len() {
+            break;
+        }
+        box_types.push(fourcc);
+        pos += size;
+    }
+
+    assert_eq!(&box_types[0], b"ftyp");
+    assert_eq!(&box_types[1], b"moov");
+
+    // After ftyp+moov, expect alternating moof+mdat pairs
+    let fragment_boxes = &box_types[2..];
+    assert!(
+        fragment_boxes.len() >= 2,
+        "expected at least one moof+mdat pair"
+    );
+    assert_eq!(
+        fragment_boxes.len() % 2,
+        0,
+        "moof+mdat should come in pairs"
+    );
+    for chunk in fragment_boxes.chunks(2) {
+        assert_eq!(&chunk[0], b"moof");
+        assert_eq!(&chunk[1], b"mdat");
+    }
+}
+
+#[test]
+fn test_that_fmp4_moov_contains_mvex() {
+    // GIVEN — a minimal fragmented MP4
+    let original = test_helpers::build_test_mp4(&[TestTrack::video(320, 240, 1)]);
+    let mut demuxer = Mp4Demuxer::open(Cursor::new(original)).unwrap();
+    let tracks = demuxer.tracks().to_vec();
+    let mut packets = Vec::new();
+    while let Some(pkt) = demuxer.read_packet().unwrap() {
+        packets.push(pkt);
+    }
+
+    let mut output = Vec::new();
+    {
+        let mut muxer = crate::fmp4_muxer::FragmentedMp4Muxer::new(&mut output);
+        for track in &tracks {
+            muxer.add_track(track).unwrap();
+        }
+        for packet in &packets {
+            muxer.write_packet(packet).unwrap();
+        }
+        muxer.finalize().unwrap();
+    }
+
+    // WHEN — find the moov box and look for mvex inside it
+    let moov = find_top_level_box(&output, b"moov").expect("moov not found");
+    let has_mvex = find_child_box(&moov, b"mvex");
+
+    // THEN
+    assert!(has_mvex, "moov should contain mvex box for fragmented MP4");
+}
+
+#[test]
+fn test_that_fmp4_muxer_only_requires_write() {
+    // GIVEN — a Write-only sink (no Seek)
+    struct WriteOnly(Vec<u8>);
+    impl std::io::Write for WriteOnly {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let original = test_helpers::build_test_mp4(&[TestTrack::video(320, 240, 3)]);
+    let mut demuxer = Mp4Demuxer::open(Cursor::new(original)).unwrap();
+    let tracks = demuxer.tracks().to_vec();
+    let mut packets = Vec::new();
+    while let Some(pkt) = demuxer.read_packet().unwrap() {
+        packets.push(pkt);
+    }
+
+    // WHEN — mux to a Write-only target (no Seek)
+    let mut output = WriteOnly(Vec::new());
+    {
+        let mut muxer = crate::fmp4_muxer::FragmentedMp4Muxer::new(&mut output);
+        for track in &tracks {
+            muxer.add_track(track).unwrap();
+        }
+        for packet in &packets {
+            muxer.write_packet(packet).unwrap();
+        }
+        muxer.finalize().unwrap();
+    }
+
+    // THEN — output should be non-empty and start with ftyp
+    assert!(output.0.len() > 8);
+    assert_eq!(&output.0[4..8], b"ftyp");
+}
+
+#[test]
+fn test_that_fmp4_sample_counts_match() {
+    // GIVEN — 7 samples across 2 tracks
+    let original =
+        test_helpers::build_test_mp4(&[TestTrack::video(320, 240, 4), TestTrack::audio(44100, 3)]);
+    let mut demuxer = Mp4Demuxer::open(Cursor::new(original)).unwrap();
+    let tracks = demuxer.tracks().to_vec();
+    let mut packets = Vec::new();
+    while let Some(pkt) = demuxer.read_packet().unwrap() {
+        packets.push(pkt);
+    }
+    let total_packets = packets.len();
+
+    // WHEN — mux as fMP4
+    let mut output = Vec::new();
+    {
+        let config = crate::fmp4_muxer::FragmentConfig {
+            max_samples_per_fragment: 3,
+        };
+        let mut muxer = crate::fmp4_muxer::FragmentedMp4Muxer::with_config(&mut output, config);
+        for track in &tracks {
+            muxer.add_track(track).unwrap();
+        }
+        for packet in &packets {
+            muxer.write_packet(packet).unwrap();
+        }
+        muxer.finalize().unwrap();
+    }
+
+    // THEN — count total sample bytes in all mdat boxes, should match input
+    let total_input_bytes: usize = packets.iter().map(|p| p.data.len()).sum();
+    let total_mdat_bytes = sum_mdat_body_bytes(&output);
+    assert_eq!(
+        total_mdat_bytes, total_input_bytes,
+        "total sample data in mdat should match input packets"
+    );
+
+    // Also verify we wrote the expected number of packets
+    assert_eq!(total_packets, 7);
+}
+
+// ---------------------------------------------------------------------------
+// Test helpers for fMP4 structure verification
+// ---------------------------------------------------------------------------
+
+/// Find a top-level box body by fourcc.
+fn find_top_level_box(data: &[u8], target: &[u8; 4]) -> Option<Vec<u8>> {
+    let mut pos = 0usize;
+    while pos + 8 <= data.len() {
+        let size =
+            u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]) as usize;
+        let fourcc = &data[pos + 4..pos + 8];
+        if size < 8 || pos + size > data.len() {
+            break;
+        }
+        if fourcc == target {
+            return Some(data[pos + 8..pos + size].to_vec());
+        }
+        pos += size;
+    }
+    None
+}
+
+/// Check if a box body contains a child box with the given fourcc.
+fn find_child_box(body: &[u8], target: &[u8; 4]) -> bool {
+    let mut pos = 0usize;
+    while pos + 8 <= body.len() {
+        let size =
+            u32::from_be_bytes([body[pos], body[pos + 1], body[pos + 2], body[pos + 3]]) as usize;
+        let fourcc = &body[pos + 4..pos + 8];
+        if size < 8 || pos + size > body.len() {
+            break;
+        }
+        if fourcc == target {
+            return true;
+        }
+        pos += size;
+    }
+    false
+}
+
+/// Sum all mdat body bytes in the file.
+fn sum_mdat_body_bytes(data: &[u8]) -> usize {
+    let mut total = 0;
+    let mut pos = 0usize;
+    while pos + 8 <= data.len() {
+        let size =
+            u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]) as usize;
+        let fourcc = &data[pos + 4..pos + 8];
+        if size < 8 || pos + size > data.len() {
+            break;
+        }
+        if fourcc == b"mdat" {
+            total += size - 8; // body = size minus 8-byte header
+        }
+        pos += size;
+    }
+    total
+}

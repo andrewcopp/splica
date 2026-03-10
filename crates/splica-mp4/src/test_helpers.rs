@@ -306,6 +306,169 @@ impl TestTrack {
     }
 }
 
+/// Build a udta box with the given body.
+pub fn build_udta(body: &[u8]) -> Vec<u8> {
+    make_box(b"udta", body)
+}
+
+/// Build a meta box with the given body.
+pub fn build_meta(body: &[u8]) -> Vec<u8> {
+    make_box(b"meta", body)
+}
+
+/// Inject extra boxes into the moov of an existing MP4.
+///
+/// This rebuilds the file with the extra boxes appended inside moov,
+/// adjusting stco/co64 offsets for the size change.
+pub fn inject_moov_boxes(mp4: &[u8], extra_boxes: &[&[u8]]) -> Vec<u8> {
+    // Find moov in the file
+    let mut pos = 0usize;
+    let mut ftyp_end = 0usize;
+    let mut moov_start = 0usize;
+    let mut moov_end = 0usize;
+
+    while pos < mp4.len() {
+        if pos + 8 > mp4.len() {
+            break;
+        }
+        let size =
+            u32::from_be_bytes([mp4[pos], mp4[pos + 1], mp4[pos + 2], mp4[pos + 3]]) as usize;
+        let fourcc = &mp4[pos + 4..pos + 8];
+        if size == 0 {
+            break;
+        }
+        if fourcc == b"ftyp" {
+            ftyp_end = pos + size;
+        } else if fourcc == b"moov" {
+            moov_start = pos;
+            moov_end = pos + size;
+        }
+        pos += size;
+    }
+
+    // Extract moov body (skip 8-byte header)
+    let moov_body = &mp4[moov_start + 8..moov_end];
+
+    // Build new moov with extra boxes
+    let extra_total: usize = extra_boxes.iter().map(|b| b.len()).sum();
+    let mut new_moov_body = Vec::with_capacity(moov_body.len() + extra_total);
+    new_moov_body.extend_from_slice(moov_body);
+    for extra in extra_boxes {
+        new_moov_body.extend_from_slice(extra);
+    }
+    let new_moov = make_box(b"moov", &new_moov_body);
+
+    // The size difference shifts mdat, so we need to adjust stco offsets
+    let size_delta = new_moov.len() as i64 - (moov_end - moov_start) as i64;
+
+    // Rebuild file: ftyp + new_moov + rest (mdat, etc.)
+    let mut result = Vec::new();
+    result.extend_from_slice(&mp4[..ftyp_end]);
+    result.extend_from_slice(&new_moov);
+    result.extend_from_slice(&mp4[moov_end..]);
+
+    // Patch stco offsets in the new moov
+    if size_delta != 0 {
+        let moov_start_new = ftyp_end;
+        patch_stco_offsets(&mut result, moov_start_new, size_delta);
+    }
+
+    result
+}
+
+/// Walk moov > trak > mdia > minf > stbl > stco and adjust all offsets.
+fn patch_stco_offsets(data: &mut [u8], moov_offset: usize, delta: i64) {
+    let moov_size = u32::from_be_bytes([
+        data[moov_offset],
+        data[moov_offset + 1],
+        data[moov_offset + 2],
+        data[moov_offset + 3],
+    ]) as usize;
+    let moov_end = moov_offset + moov_size;
+
+    // Walk all boxes inside moov looking for stco
+    walk_and_patch_stco(data, moov_offset + 8, moov_end, delta);
+}
+
+fn walk_and_patch_stco(data: &mut [u8], start: usize, end: usize, delta: i64) {
+    let mut pos = start;
+    while pos + 8 <= end {
+        let size =
+            u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]) as usize;
+        if size < 8 || pos + size > end {
+            break;
+        }
+        let fourcc = [data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]];
+
+        if &fourcc == b"stco" {
+            // Full box: 4 bytes version+flags, 4 bytes entry_count, then 4-byte offsets
+            let body_start = pos + 8 + 4; // skip box header + version+flags
+            if body_start + 4 <= pos + size {
+                let count = u32::from_be_bytes([
+                    data[body_start],
+                    data[body_start + 1],
+                    data[body_start + 2],
+                    data[body_start + 3],
+                ]) as usize;
+                let entries_start = body_start + 4;
+                for i in 0..count {
+                    let off = entries_start + i * 4;
+                    if off + 4 <= pos + size {
+                        let val = u32::from_be_bytes([
+                            data[off],
+                            data[off + 1],
+                            data[off + 2],
+                            data[off + 3],
+                        ]);
+                        let new_val = (val as i64 + delta) as u32;
+                        data[off..off + 4].copy_from_slice(&new_val.to_be_bytes());
+                    }
+                }
+            }
+        } else if &fourcc == b"co64" {
+            let body_start = pos + 8 + 4;
+            if body_start + 4 <= pos + size {
+                let count = u32::from_be_bytes([
+                    data[body_start],
+                    data[body_start + 1],
+                    data[body_start + 2],
+                    data[body_start + 3],
+                ]) as usize;
+                let entries_start = body_start + 4;
+                for i in 0..count {
+                    let off = entries_start + i * 8;
+                    if off + 8 <= pos + size {
+                        let val = u64::from_be_bytes([
+                            data[off],
+                            data[off + 1],
+                            data[off + 2],
+                            data[off + 3],
+                            data[off + 4],
+                            data[off + 5],
+                            data[off + 6],
+                            data[off + 7],
+                        ]);
+                        let new_val = (val as i64 + delta) as u64;
+                        data[off..off + 8].copy_from_slice(&new_val.to_be_bytes());
+                    }
+                }
+            }
+        } else if is_container_box(&fourcc) {
+            // Recurse into container boxes
+            walk_and_patch_stco(data, pos + 8, pos + size, delta);
+        }
+
+        pos += size;
+    }
+}
+
+fn is_container_box(fourcc: &[u8; 4]) -> bool {
+    matches!(
+        fourcc,
+        b"moov" | b"trak" | b"mdia" | b"minf" | b"stbl" | b"edts" | b"dinf"
+    )
+}
+
 /// Build a complete minimal MP4 byte sequence.
 pub fn build_test_mp4(tracks: &[TestTrack]) -> Vec<u8> {
     let ftyp = build_ftyp();
