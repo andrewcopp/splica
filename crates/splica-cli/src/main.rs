@@ -86,7 +86,26 @@ enum Commands {
         /// Target video bitrate (e.g., "2M", "1500k", or raw bps).
         #[arg(long)]
         bitrate: Option<String>,
+
+        /// Encoding speed/quality preset.
+        #[arg(long, default_value = "medium")]
+        preset: EncodePreset,
+
+        /// Maximum frame rate hint for the encoder (e.g., 30, 60).
+        #[arg(long)]
+        max_fps: Option<f32>,
     },
+}
+
+/// Encoding speed/quality tradeoff preset.
+#[derive(Clone, ValueEnum)]
+enum EncodePreset {
+    /// Fastest encoding, lower quality. Good for previews.
+    Fast,
+    /// Balanced speed and quality. Good default.
+    Medium,
+    /// Slower encoding, better quality. Good for final output.
+    Slow,
 }
 
 #[derive(Clone, ValueEnum)]
@@ -112,7 +131,9 @@ fn main() -> Result<()> {
             input,
             output,
             bitrate,
-        } => transcode(&input, &output, bitrate.as_deref()),
+            preset,
+            max_fps,
+        } => transcode(&input, &output, bitrate.as_deref(), &preset, max_fps),
     }
 }
 
@@ -656,11 +677,27 @@ fn parse_bitrate(s: &str) -> Result<u32> {
     }
 }
 
-fn transcode(input: &PathBuf, output: &PathBuf, bitrate: Option<&str>) -> Result<()> {
+fn transcode(
+    input: &PathBuf,
+    output: &PathBuf,
+    bitrate: Option<&str>,
+    preset: &EncodePreset,
+    max_fps: Option<f32>,
+) -> Result<()> {
     let bitrate_bps = match bitrate {
         Some(s) => parse_bitrate(s)?,
-        None => 1_000_000, // 1 Mbps default
+        None => match preset {
+            EncodePreset::Fast => 500_000,     // 500 kbps
+            EncodePreset::Medium => 1_000_000, // 1 Mbps
+            EncodePreset::Slow => 2_000_000,   // 2 Mbps
+        },
     };
+
+    let frame_rate_hint = max_fps.unwrap_or(match preset {
+        EncodePreset::Fast => 30.0,
+        EncodePreset::Medium => 30.0,
+        EncodePreset::Slow => 60.0,
+    });
 
     let demuxer = open_mp4_demuxer(input).wrap_err("transcode currently requires MP4 input")?;
 
@@ -715,6 +752,7 @@ fn transcode(input: &PathBuf, output: &PathBuf, bitrate: Option<&str>) -> Result
 
         let encoder = H264EncoderBuilder::new()
             .bitrate(bitrate_bps)
+            .max_frame_rate(frame_rate_hint)
             .track_index(*track_idx)
             .build()
             .into_diagnostic()
@@ -729,8 +767,13 @@ fn transcode(input: &PathBuf, output: &PathBuf, bitrate: Option<&str>) -> Result
         .into_diagnostic()
         .wrap_err("failed to build transcode pipeline")?;
 
+    let preset_name = match preset {
+        EncodePreset::Fast => "fast",
+        EncodePreset::Medium => "medium",
+        EncodePreset::Slow => "slow",
+    };
     eprintln!(
-        "Transcoding {} → {} (H.264, {} kbps)",
+        "Transcoding {} → {} (H.264, {} kbps, preset: {preset_name})",
         input.display(),
         output.display(),
         bitrate_bps / 1000
