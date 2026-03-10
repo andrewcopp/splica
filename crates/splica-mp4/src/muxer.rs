@@ -10,6 +10,10 @@ use std::io::{Seek, SeekFrom, Write};
 
 use splica_core::{MuxError, Muxer, Packet, ResourceBudget, TrackIndex, TrackInfo, TrackKind};
 
+use crate::box_builders::{
+    build_dinf, build_hdlr, build_mdhd, build_mvhd, build_smhd, build_stsd, build_tkhd,
+    build_vmhd, io_err, make_box, make_full_box,
+};
 use crate::boxes::stsd::CodecConfig;
 use crate::metadata::MetadataBox;
 
@@ -300,7 +304,7 @@ impl<W: Write + Seek> Mp4Muxer<W> {
         let hdlr = build_hdlr(handler);
 
         // stbl
-        let stsd = self.build_stsd(&track.codec_config)?;
+        let stsd = build_stsd(&track.codec_config)?;
         let stts = build_stts(&track.samples);
         let ctts = build_ctts(&track.samples);
         let stsc = build_stsc(track.samples.len() as u32);
@@ -343,56 +347,6 @@ impl<W: Write + Seek> Mp4Muxer<W> {
         Ok(make_box(b"trak", &trak_body))
     }
 
-    fn build_stsd(&self, config: &CodecConfig) -> Result<Vec<u8>, MuxError> {
-        let mut body = Vec::new();
-        // version + flags
-        body.extend_from_slice(&[0, 0, 0, 0]);
-        // entry count
-        body.extend_from_slice(&1u32.to_be_bytes());
-
-        match config {
-            CodecConfig::Avc1 {
-                width,
-                height,
-                avcc,
-            } => {
-                let entry = build_visual_sample_entry(b"avc1", *width, *height, b"avcC", avcc);
-                body.extend_from_slice(&entry);
-            }
-            CodecConfig::Hev1 {
-                width,
-                height,
-                hvcc,
-            } => {
-                let entry = build_visual_sample_entry(b"hev1", *width, *height, b"hvcC", hvcc);
-                body.extend_from_slice(&entry);
-            }
-            CodecConfig::Av1 {
-                width,
-                height,
-                av1c,
-            } => {
-                let entry = build_visual_sample_entry(b"av01", *width, *height, b"av1C", av1c);
-                body.extend_from_slice(&entry);
-            }
-            CodecConfig::Mp4a {
-                sample_rate,
-                channel_count,
-                esds,
-            } => {
-                let entry = build_audio_sample_entry(*sample_rate, *channel_count, esds);
-                body.extend_from_slice(&entry);
-            }
-            CodecConfig::Unknown(name) => {
-                return Err(MuxError::IncompatibleCodec {
-                    codec: name.clone(),
-                    container: "mp4".to_string(),
-                });
-            }
-        }
-
-        Ok(make_full_box(b"stsd", &body))
-    }
 }
 
 impl<W: Write + Seek> Muxer for Mp4Muxer<W> {
@@ -432,22 +386,8 @@ impl<W: Write + Seek> Muxer for Mp4Muxer<W> {
 }
 
 // ---------------------------------------------------------------------------
-// Box building helpers
+// Muxer-specific helpers (ftyp, sample table boxes)
 // ---------------------------------------------------------------------------
-
-fn make_box(fourcc: &[u8; 4], body: &[u8]) -> Vec<u8> {
-    let size = (8 + body.len()) as u32;
-    let mut buf = Vec::with_capacity(size as usize);
-    buf.extend_from_slice(&size.to_be_bytes());
-    buf.extend_from_slice(fourcc);
-    buf.extend_from_slice(body);
-    buf
-}
-
-fn make_full_box(fourcc: &[u8; 4], body: &[u8]) -> Vec<u8> {
-    // body already includes version+flags prefix
-    make_box(fourcc, body)
-}
 
 fn build_ftyp() -> Vec<u8> {
     let mut body = Vec::new();
@@ -457,166 +397,6 @@ fn build_ftyp() -> Vec<u8> {
     body.extend_from_slice(b"iso2");
     body.extend_from_slice(b"mp41");
     make_box(b"ftyp", &body)
-}
-
-fn build_mvhd(timescale: u32, duration: u32) -> Vec<u8> {
-    let mut body = Vec::new();
-    // version=0, flags=0
-    body.extend_from_slice(&[0, 0, 0, 0]);
-    body.extend_from_slice(&0u32.to_be_bytes()); // creation_time
-    body.extend_from_slice(&0u32.to_be_bytes()); // modification_time
-    body.extend_from_slice(&timescale.to_be_bytes());
-    body.extend_from_slice(&duration.to_be_bytes());
-    body.extend_from_slice(&0x00010000u32.to_be_bytes()); // rate = 1.0
-    body.extend_from_slice(&0x0100u16.to_be_bytes()); // volume = 1.0
-    body.extend_from_slice(&[0u8; 10]); // reserved
-                                        // Identity matrix (9 * 4 = 36 bytes)
-    for &val in &[0x00010000u32, 0, 0, 0, 0x00010000, 0, 0, 0, 0x40000000] {
-        body.extend_from_slice(&val.to_be_bytes());
-    }
-    body.extend_from_slice(&[0u8; 24]); // pre_defined
-    body.extend_from_slice(&0xFFFFFFFFu32.to_be_bytes()); // next_track_ID
-    make_full_box(b"mvhd", &body)
-}
-
-fn build_tkhd(track_id: u32, duration: u32, width: u32, height: u32) -> Vec<u8> {
-    let mut body = Vec::new();
-    // version=0, flags=3 (track_enabled | track_in_movie)
-    body.extend_from_slice(&[0, 0, 0, 3]);
-    body.extend_from_slice(&0u32.to_be_bytes()); // creation_time
-    body.extend_from_slice(&0u32.to_be_bytes()); // modification_time
-    body.extend_from_slice(&track_id.to_be_bytes());
-    body.extend_from_slice(&0u32.to_be_bytes()); // reserved
-    body.extend_from_slice(&duration.to_be_bytes());
-    body.extend_from_slice(&[0u8; 8]); // reserved
-    body.extend_from_slice(&0u16.to_be_bytes()); // layer
-    body.extend_from_slice(&0u16.to_be_bytes()); // alternate_group
-    body.extend_from_slice(&0u16.to_be_bytes()); // volume (0 for video)
-    body.extend_from_slice(&[0u8; 2]); // reserved
-                                       // Identity matrix
-    for &val in &[0x00010000u32, 0, 0, 0, 0x00010000, 0, 0, 0, 0x40000000] {
-        body.extend_from_slice(&val.to_be_bytes());
-    }
-    // Width and height as 16.16 fixed-point
-    body.extend_from_slice(&(width << 16).to_be_bytes());
-    body.extend_from_slice(&(height << 16).to_be_bytes());
-    make_full_box(b"tkhd", &body)
-}
-
-fn build_mdhd(timescale: u32, duration: u32) -> Vec<u8> {
-    let mut body = Vec::new();
-    // version=0, flags=0
-    body.extend_from_slice(&[0, 0, 0, 0]);
-    body.extend_from_slice(&0u32.to_be_bytes()); // creation_time
-    body.extend_from_slice(&0u32.to_be_bytes()); // modification_time
-    body.extend_from_slice(&timescale.to_be_bytes());
-    body.extend_from_slice(&duration.to_be_bytes());
-    body.extend_from_slice(&0x55C4u16.to_be_bytes()); // language (undetermined)
-    body.extend_from_slice(&0u16.to_be_bytes()); // pre_defined
-    make_full_box(b"mdhd", &body)
-}
-
-fn build_hdlr(handler_type: &[u8; 4]) -> Vec<u8> {
-    let mut body = Vec::new();
-    // version=0, flags=0
-    body.extend_from_slice(&[0, 0, 0, 0]);
-    body.extend_from_slice(&0u32.to_be_bytes()); // pre_defined
-    body.extend_from_slice(handler_type);
-    body.extend_from_slice(&[0u8; 12]); // reserved
-    body.push(0); // name (null-terminated empty string)
-    make_full_box(b"hdlr", &body)
-}
-
-fn build_vmhd() -> Vec<u8> {
-    let mut body = Vec::new();
-    // version=0, flags=1
-    body.extend_from_slice(&[0, 0, 0, 1]);
-    body.extend_from_slice(&0u16.to_be_bytes()); // graphicsmode
-    body.extend_from_slice(&[0u8; 6]); // opcolor
-    make_full_box(b"vmhd", &body)
-}
-
-fn build_smhd() -> Vec<u8> {
-    let mut body = Vec::new();
-    // version=0, flags=0
-    body.extend_from_slice(&[0, 0, 0, 0]);
-    body.extend_from_slice(&0u16.to_be_bytes()); // balance
-    body.extend_from_slice(&0u16.to_be_bytes()); // reserved
-    make_full_box(b"smhd", &body)
-}
-
-fn build_dinf() -> Vec<u8> {
-    // dinf > dref > url (self-contained)
-    let mut url_body = Vec::new();
-    // version=0, flags=1 (self-contained)
-    url_body.extend_from_slice(&[0, 0, 0, 1]);
-    let url_box = make_full_box(b"url ", &url_body);
-
-    let mut dref_body = Vec::new();
-    // version=0, flags=0
-    dref_body.extend_from_slice(&[0, 0, 0, 0]);
-    dref_body.extend_from_slice(&1u32.to_be_bytes()); // entry_count
-    dref_body.extend_from_slice(&url_box);
-    let dref = make_full_box(b"dref", &dref_body);
-
-    make_box(b"dinf", &dref)
-}
-
-fn build_visual_sample_entry(
-    fourcc: &[u8; 4],
-    width: u16,
-    height: u16,
-    config_fourcc: &[u8; 4],
-    config_data: &[u8],
-) -> Vec<u8> {
-    let mut entry = Vec::new();
-    // 6 reserved + 2 data_ref_index
-    entry.extend_from_slice(&[0u8; 6]);
-    entry.extend_from_slice(&1u16.to_be_bytes()); // data_ref_index
-                                                  // pre_defined + reserved (16 bytes)
-    entry.extend_from_slice(&[0u8; 16]);
-    // width, height
-    entry.extend_from_slice(&width.to_be_bytes());
-    entry.extend_from_slice(&height.to_be_bytes());
-    // horiz_res, vert_res (72 dpi as 16.16)
-    entry.extend_from_slice(&0x00480000u32.to_be_bytes());
-    entry.extend_from_slice(&0x00480000u32.to_be_bytes());
-    entry.extend_from_slice(&0u32.to_be_bytes()); // reserved
-    entry.extend_from_slice(&1u16.to_be_bytes()); // frame_count
-    entry.extend_from_slice(&[0u8; 32]); // compressor_name
-    entry.extend_from_slice(&0x0018u16.to_be_bytes()); // depth = 24
-    entry.extend_from_slice(&(-1i16).to_be_bytes()); // pre_defined
-
-    // Config sub-box
-    if !config_data.is_empty() {
-        let config_box = make_box(config_fourcc, config_data);
-        entry.extend_from_slice(&config_box);
-    }
-
-    make_box(fourcc, &entry)
-}
-
-fn build_audio_sample_entry(sample_rate: u32, channel_count: u16, esds: &[u8]) -> Vec<u8> {
-    let mut entry = Vec::new();
-    // 6 reserved + 2 data_ref_index
-    entry.extend_from_slice(&[0u8; 6]);
-    entry.extend_from_slice(&1u16.to_be_bytes()); // data_ref_index
-                                                  // 8 reserved
-    entry.extend_from_slice(&[0u8; 8]);
-    entry.extend_from_slice(&channel_count.to_be_bytes());
-    entry.extend_from_slice(&16u16.to_be_bytes()); // sample_size = 16
-    entry.extend_from_slice(&0u16.to_be_bytes()); // pre_defined
-    entry.extend_from_slice(&0u16.to_be_bytes()); // reserved
-                                                  // sample_rate as 16.16 fixed-point
-    entry.extend_from_slice(&(sample_rate << 16).to_be_bytes());
-
-    // esds sub-box
-    if !esds.is_empty() {
-        let esds_box = make_full_box(b"esds", esds);
-        entry.extend_from_slice(&esds_box);
-    }
-
-    make_box(b"mp4a", &entry)
 }
 
 fn build_stts(samples: &[(u64, u32, i64, i32, bool)]) -> Vec<u8> {
@@ -738,6 +518,3 @@ fn build_stss(samples: &[(u64, u32, i64, i32, bool)]) -> Option<Vec<u8>> {
     Some(make_full_box(b"stss", &body))
 }
 
-fn io_err(e: std::io::Error) -> MuxError {
-    MuxError::Io(e)
-}

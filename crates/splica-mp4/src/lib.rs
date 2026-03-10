@@ -3,6 +3,7 @@
 //! Currently implements read-only demuxing: parsing the MP4 container structure
 //! and yielding compressed packets per track.
 
+pub(crate) mod box_builders;
 pub mod boxes;
 pub mod demuxer;
 pub mod error;
