@@ -8,4 +8,5 @@ repository.workspace = true
 description = "Typed filter graph engine for the splica media processing library"
 
 [dependencies]
+bytes.workspace = true
 splica-core.workspace = true
