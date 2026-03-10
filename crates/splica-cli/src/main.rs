@@ -12,7 +12,7 @@ use splica_filter::{AspectMode, ScaleFilter};
 use splica_mp4::boxes::stsd::CodecConfig;
 use splica_mp4::{Mp4Demuxer, Mp4Muxer};
 use splica_pipeline::{PipelineBuilder, PipelineEventKind};
-use splica_webm::WebmDemuxer;
+use splica_webm::{WebmDemuxer, WebmMuxer};
 
 #[derive(Parser)]
 #[command(name = "splica", version, about = "Media processing tool")]
@@ -181,13 +181,7 @@ fn validate_output_format(output: &PathBuf) -> Result<()> {
         .to_lowercase();
 
     match ext.as_str() {
-        "mp4" | "m4v" | "m4a" => Ok(()),
-        "webm" => Err(miette::miette!(
-            "output format 'webm' is not yet supported for writing\n  \
-             → splica can currently write: mp4\n  \
-             → WebM output is planned for a future release\n  \
-             → To convert to MP4, use: splica convert -i <input> -o output.mp4"
-        )),
+        "mp4" | "m4v" | "m4a" | "webm" => Ok(()),
         "mkv" | "mka" => Err(miette::miette!(
             "output format 'mkv' is not yet supported for writing\n  \
              → splica can currently write: mp4\n  \
@@ -299,6 +293,14 @@ fn detect_format(file: &mut (impl Read + Seek)) -> Result<ContainerFormat> {
     Err(miette::miette!(
         "unsupported container format — splica supports MP4 and WebM"
     ))
+}
+
+/// Returns true if the output path has a WebM extension.
+fn is_webm_output(path: &PathBuf) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase() == "webm")
+        .unwrap_or(false)
 }
 
 /// Opens a demuxer for the given file, auto-detecting the container format.
@@ -477,7 +479,11 @@ fn convert(input: &PathBuf, output: &PathBuf) -> Result<()> {
         .into_diagnostic()
         .wrap_err_with(|| format!("could not create output file '{}'", output.display()))?;
 
-    let mut muxer = Mp4Muxer::new(BufWriter::new(out_file));
+    let mut muxer: Box<dyn Muxer> = if is_webm_output(output) {
+        Box::new(WebmMuxer::new(BufWriter::new(out_file)))
+    } else {
+        Box::new(Mp4Muxer::new(BufWriter::new(out_file)))
+    };
 
     let track_count = demuxer.tracks().len();
     for i in 0..track_count {
@@ -504,7 +510,7 @@ fn convert(input: &PathBuf, output: &PathBuf) -> Result<()> {
     muxer
         .finalize()
         .into_diagnostic()
-        .wrap_err("failed to finalize output MP4")?;
+        .wrap_err("failed to finalize output")?;
 
     eprintln!(
         "Copied {packet_count} packets across {track_count} tracks to {}",

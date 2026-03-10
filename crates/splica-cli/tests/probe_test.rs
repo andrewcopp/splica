@@ -128,7 +128,7 @@ fn test_that_convert_rejects_unsupported_output_format() {
     let dir = std::env::temp_dir().join("splica_test");
     std::fs::create_dir_all(&dir).unwrap();
     let input_path = dir.join("format_test_input.mp4");
-    let output_path = dir.join("format_test_output.webm");
+    let output_path = dir.join("format_test_output.avi");
 
     let source_mp4 = build_muxed_test_mp4();
     std::fs::write(&input_path, &source_mp4).unwrap();
@@ -147,12 +147,8 @@ fn test_that_convert_rejects_unsupported_output_format() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("not yet supported"),
-        "should explain webm is unsupported. stderr: {stderr}"
-    );
-    assert!(
-        stderr.contains("mp4"),
-        "should suggest mp4 as alternative. stderr: {stderr}"
+        stderr.contains("unsupported output format"),
+        "should explain format is unsupported. stderr: {stderr}"
     );
 
     let _ = std::fs::remove_file(&input_path);

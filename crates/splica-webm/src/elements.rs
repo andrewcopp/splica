@@ -1,6 +1,4 @@
 //! WebM/Matroska EBML element IDs.
-//!
-//! Only the subset needed for demuxing is defined here.
 
 // EBML Header
 pub const EBML: u32 = 0x1A45DFA3;
@@ -37,6 +35,21 @@ pub const CHANNELS: u32 = 0x9F;
 pub const CLUSTER: u32 = 0x1F43B675;
 pub const CLUSTER_TIMESTAMP: u32 = 0xE7;
 pub const SIMPLE_BLOCK: u32 = 0xA3;
+
+// EBML Header (additional)
+pub const EBML_READ_VERSION: u32 = 0x42F7;
+pub const EBML_MAX_ID_LENGTH: u32 = 0x42F2;
+pub const EBML_MAX_SIZE_LENGTH: u32 = 0x42F3;
+pub const EBML_DOC_TYPE_VERSION: u32 = 0x4287;
+pub const EBML_DOC_TYPE_READ_VERSION: u32 = 0x4285;
+
+// Segment Information (additional)
+pub const MUXING_APP: u32 = 0x4D80;
+pub const WRITING_APP: u32 = 0x5741;
+
+// Tracks (additional)
+pub const TRACK_UID: u32 = 0x73C5;
+pub const FLAG_LACING: u32 = 0x9C;
 
 // Track type values
 pub const TRACK_TYPE_VIDEO: u64 = 1;

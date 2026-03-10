@@ -22,6 +22,12 @@ pub enum WebmError {
     Io(#[from] std::io::Error),
 }
 
+impl From<WebmError> for splica_core::MuxError {
+    fn from(e: WebmError) -> Self {
+        splica_core::MuxError::Io(std::io::Error::other(e.to_string()))
+    }
+}
+
 impl From<WebmError> for splica_core::DemuxError {
     fn from(e: WebmError) -> Self {
         match e {
