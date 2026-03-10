@@ -1,0 +1,23 @@
+# Build
+/target/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+
+# Test fixtures (large media files)
+tests/fixtures/*.mp4
+tests/fixtures/*.mkv
+tests/fixtures/*.webm
+!tests/fixtures/README.md
