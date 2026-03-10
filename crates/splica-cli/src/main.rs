@@ -166,6 +166,15 @@ struct TranscodeResult {
     frames_decoded: u64,
     frames_encoded: u64,
     packets_written: u64,
+    audio_tracks: Vec<TranscodeAudioInfo>,
+}
+
+#[derive(Serialize)]
+struct TranscodeAudioInfo {
+    codec: String,
+    sample_rate: u32,
+    channels: Option<u32>,
+    mode: String, // "pass_through" or "re_encoded"
 }
 
 #[derive(Serialize)]
@@ -396,19 +405,13 @@ struct ProbeTrack {
     index: u32,
     kind: String,
     codec: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
     duration_seconds: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     width: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     height: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     frame_rate: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pixel_format: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     sample_rate: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    channels: Option<u32>,
     channel_layout: Option<String>,
 }
 
@@ -442,6 +445,10 @@ fn probe(file: &PathBuf, format: &OutputFormat) -> Result<()> {
                     .as_ref()
                     .and_then(|v| v.pixel_format.map(|pf| format!("{pf:?}"))),
                 sample_rate: t.audio.as_ref().map(|a| a.sample_rate),
+                channels: t
+                    .audio
+                    .as_ref()
+                    .and_then(|a| a.channel_layout.map(|cl| cl.channel_count())),
                 channel_layout: t
                     .audio
                     .as_ref()
@@ -477,8 +484,11 @@ fn probe(file: &PathBuf, format: &OutputFormat) -> Result<()> {
                 }
                 if let Some(sr) = track.sample_rate {
                     print!("    Sample rate: {sr} Hz");
+                    if let Some(ch) = track.channels {
+                        print!(", {ch}ch");
+                    }
                     if let Some(ref cl) = track.channel_layout {
-                        print!(", {cl}");
+                        print!(" ({cl})");
                     }
                     println!();
                 }
@@ -879,7 +889,7 @@ fn transcode(
 
     if json_mode {
         match result {
-            Ok((packets_read, frames_decoded, frames_encoded, packets_written)) => {
+            Ok((packets_read, frames_decoded, frames_encoded, packets_written, audio_tracks)) => {
                 let output_json = TranscodeResult {
                     status: "ok".to_string(),
                     input: input.display().to_string(),
@@ -888,6 +898,7 @@ fn transcode(
                     frames_decoded,
                     frames_encoded,
                     packets_written,
+                    audio_tracks,
                 };
                 println!("{}", serde_json::to_string_pretty(&output_json).unwrap());
                 Ok(())
@@ -919,7 +930,7 @@ fn transcode_inner(
     resize: Option<&str>,
     aspect_mode_arg: &AspectModeArg,
     json_mode: bool,
-) -> Result<(u64, u64, u64, u64)> {
+) -> Result<(u64, u64, u64, u64, Vec<TranscodeAudioInfo>)> {
     validate_output_format(output)?;
     let bitrate_bps = match bitrate {
         Some(s) => parse_bitrate(s)?,
@@ -951,6 +962,26 @@ fn transcode_inner(
             }
         }
     }
+
+    // Collect audio track metadata for JSON output
+    let audio_tracks: Vec<TranscodeAudioInfo> = tracks
+        .iter()
+        .filter(|t| t.kind == TrackKind::Audio)
+        .map(|t| {
+            let codec = format_codec(&t.codec);
+            let sample_rate = t.audio.as_ref().map(|a| a.sample_rate).unwrap_or(0);
+            let channels = t
+                .audio
+                .as_ref()
+                .and_then(|a| a.channel_layout.map(|cl| cl.channel_count()));
+            TranscodeAudioInfo {
+                codec,
+                sample_rate,
+                channels,
+                mode: "pass_through".to_string(),
+            }
+        })
+        .collect();
 
     if video_track_configs.is_empty() {
         return Err(miette::miette!(
@@ -1077,5 +1108,6 @@ fn transcode_inner(
         counter_frames_decoded.load(Ordering::Relaxed),
         counter_frames_encoded.load(Ordering::Relaxed),
         counter_packets_written.load(Ordering::Relaxed),
+        audio_tracks,
     ))
 }
