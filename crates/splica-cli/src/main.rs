@@ -489,6 +489,13 @@ fn trim(input: &PathBuf, output: &PathBuf, start: Option<&str>, end: Option<&str
     let mut packet_count: u64 = 0;
     let mut skipped: u64 = 0;
 
+    // Track the last keyframe before start for each track, so the output
+    // begins on a keyframe and decoders can produce valid frames.
+    let mut pending_keyframes: std::collections::HashMap<u32, splica_core::Packet> =
+        std::collections::HashMap::new();
+    let mut past_start = start_secs.is_none();
+    let mut actual_start_secs: Option<f64> = None;
+
     while let Some(packet) = demuxer
         .read_packet()
         .into_diagnostic()
@@ -496,22 +503,33 @@ fn trim(input: &PathBuf, output: &PathBuf, start: Option<&str>, end: Option<&str
     {
         let pts_secs = packet.pts.as_seconds_f64();
 
-        // Filter by time range
+        // Before start: buffer the last keyframe per track
         if let Some(start) = start_secs {
-            if pts_secs < start {
-                // For video: skip until we find a keyframe at or after start.
-                // For audio: skip packets before start.
-                // However, we need to include the keyframe before start for
-                // correct decoding. Since this is stream copy, we include
-                // keyframes just before start to avoid broken output.
-                if !packet.is_keyframe {
-                    skipped += 1;
-                    continue;
+            if !past_start && pts_secs < start {
+                if packet.is_keyframe {
+                    pending_keyframes.insert(packet.track_index.0, packet);
                 }
-                // Include the last keyframe before start, but only track it.
-                // Actually for clean trim, skip everything before start.
                 skipped += 1;
                 continue;
+            }
+
+            // We've crossed the start boundary — flush buffered keyframes first
+            if !past_start {
+                past_start = true;
+
+                // Write the last keyframe for each track (snap to keyframe)
+                let mut keyframes: Vec<_> = pending_keyframes.drain().collect();
+                keyframes.sort_by_key(|(idx, _)| *idx);
+                for (_, kf_packet) in keyframes {
+                    if actual_start_secs.is_none() {
+                        actual_start_secs = Some(kf_packet.pts.as_seconds_f64());
+                    }
+                    muxer
+                        .write_packet_data(&kf_packet)
+                        .into_diagnostic()
+                        .wrap_err("failed to write keyframe packet")?;
+                    packet_count += 1;
+                }
             }
         }
 
@@ -539,9 +557,25 @@ fn trim(input: &PathBuf, output: &PathBuf, start: Option<&str>, end: Option<&str
         output.display()
     );
     if let (Some(s), Some(e)) = (start_secs, end_secs) {
-        eprintln!("  Time range: {s:.2}s — {e:.2}s");
+        if let Some(actual) = actual_start_secs {
+            if (actual - s).abs() > 0.01 {
+                eprintln!("  Trimmed from {actual:.2}s (snapped from {s:.2}s to nearest keyframe) — {e:.2}s");
+            } else {
+                eprintln!("  Time range: {s:.2}s — {e:.2}s");
+            }
+        } else {
+            eprintln!("  Time range: {s:.2}s — {e:.2}s");
+        }
     } else if let Some(s) = start_secs {
-        eprintln!("  Start: {s:.2}s");
+        if let Some(actual) = actual_start_secs {
+            if (actual - s).abs() > 0.01 {
+                eprintln!("  Trimmed from {actual:.2}s (snapped from {s:.2}s to nearest keyframe)");
+            } else {
+                eprintln!("  Start: {s:.2}s");
+            }
+        } else {
+            eprintln!("  Start: {s:.2}s");
+        }
     } else if let Some(e) = end_secs {
         eprintln!("  End: {e:.2}s");
     }
