@@ -7,5 +7,16 @@ license.workspace = true
 repository.workspace = true
 description = "MP4 (ISO BMFF) demuxer and muxer for the splica media processing library"
 
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[features]
+wasm = ["dep:wasm-bindgen", "dep:serde", "dep:serde_json"]
+
 [dependencies]
 splica-core.workspace = true
+bytes.workspace = true
+thiserror.workspace = true
+wasm-bindgen = { version = "0.2", optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }

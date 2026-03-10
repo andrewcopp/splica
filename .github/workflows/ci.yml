@@ -31,7 +31,7 @@ jobs:
       - run: cargo clippy --all-targets -- -D warnings
 
   wasm:
-    name: WASM (splica-core)
+    name: WASM (splica-core + splica-mp4)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -40,6 +40,18 @@ jobs:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --target wasm32-unknown-unknown -p splica-core
+      - name: Build splica-mp4 WASM with bindings
+        run: cargo build --target wasm32-unknown-unknown -p splica-mp4 --features wasm --release
+      - name: Report WASM bundle size
+        id: wasm_size
+        run: |
+          WASM_SIZE=$(stat -c%s target/wasm32-unknown-unknown/release/splica_mp4.wasm)
+          WASM_SIZE_KB=$((WASM_SIZE / 1024))
+          echo "splica_mp4_wasm_bytes=$WASM_SIZE" >> "$GITHUB_OUTPUT"
+          echo "### WASM Bundle Size" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Crate | Size |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-------|------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| splica-mp4 (release) | ${WASM_SIZE_KB} KB (${WASM_SIZE} bytes) |" >> "$GITHUB_STEP_SUMMARY"
 
   fmt:
     name: Format
