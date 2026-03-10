@@ -6,8 +6,11 @@ use clap::{Parser, Subcommand, ValueEnum};
 use miette::{Context, IntoDiagnostic, Result};
 use serde::Serialize;
 
-use splica_core::{Demuxer, Muxer, TrackIndex, TrackKind};
+use splica_codec::{H264Decoder, H264EncoderBuilder};
+use splica_core::{Codec, Demuxer, Muxer, TrackIndex, TrackKind, VideoCodec};
+use splica_mp4::boxes::stsd::CodecConfig;
 use splica_mp4::{Mp4Demuxer, Mp4Muxer};
+use splica_pipeline::{PipelineBuilder, PipelineEventKind};
 
 #[derive(Parser)]
 #[command(name = "splica", version, about = "Media processing tool")]
@@ -68,6 +71,21 @@ enum Commands {
         #[arg(short, long)]
         output: PathBuf,
     },
+
+    /// Transcode video using the pipeline (demux → decode → encode → mux).
+    Transcode {
+        /// Input file path.
+        #[arg(short, long)]
+        input: PathBuf,
+
+        /// Output file path.
+        #[arg(short, long)]
+        output: PathBuf,
+
+        /// Target video bitrate (e.g., "2M", "1500k", or raw bps).
+        #[arg(long)]
+        bitrate: Option<String>,
+    },
 }
 
 #[derive(Clone, ValueEnum)]
@@ -89,6 +107,11 @@ fn main() -> Result<()> {
             end,
         } => trim(&input, &output, start.as_deref(), end.as_deref()),
         Commands::ExtractAudio { input, output } => extract_audio(&input, &output),
+        Commands::Transcode {
+            input,
+            output,
+            bitrate,
+        } => transcode(&input, &output, bitrate.as_deref()),
     }
 }
 
@@ -536,6 +559,140 @@ fn extract_audio(input: &PathBuf, output: &PathBuf) -> Result<()> {
         audio_tracks.len(),
         output.display()
     );
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// transcode
+// ---------------------------------------------------------------------------
+
+/// Parses a bitrate string like "2M", "1500k", or "1000000" into bits per second.
+fn parse_bitrate(s: &str) -> Result<u32> {
+    let s = s.trim();
+    if let Some(prefix) = s.strip_suffix('M') {
+        let val: f64 = prefix
+            .parse()
+            .into_diagnostic()
+            .wrap_err_with(|| format!("invalid bitrate: '{s}'"))?;
+        Ok((val * 1_000_000.0) as u32)
+    } else if let Some(prefix) = s.strip_suffix('m') {
+        let val: f64 = prefix
+            .parse()
+            .into_diagnostic()
+            .wrap_err_with(|| format!("invalid bitrate: '{s}'"))?;
+        Ok((val * 1_000_000.0) as u32)
+    } else if let Some(prefix) = s.strip_suffix('k') {
+        let val: f64 = prefix
+            .parse()
+            .into_diagnostic()
+            .wrap_err_with(|| format!("invalid bitrate: '{s}'"))?;
+        Ok((val * 1_000.0) as u32)
+    } else if let Some(prefix) = s.strip_suffix('K') {
+        let val: f64 = prefix
+            .parse()
+            .into_diagnostic()
+            .wrap_err_with(|| format!("invalid bitrate: '{s}'"))?;
+        Ok((val * 1_000.0) as u32)
+    } else {
+        s.parse::<u32>().into_diagnostic().wrap_err_with(|| {
+            format!("invalid bitrate: '{s}' — use e.g. '2M', '1500k', or raw bps")
+        })
+    }
+}
+
+fn transcode(input: &PathBuf, output: &PathBuf, bitrate: Option<&str>) -> Result<()> {
+    let bitrate_bps = match bitrate {
+        Some(s) => parse_bitrate(s)?,
+        None => 1_000_000, // 1 Mbps default
+    };
+
+    let in_file = File::open(input)
+        .into_diagnostic()
+        .wrap_err_with(|| format!("could not open input file '{}'", input.display()))?;
+
+    let demuxer = Mp4Demuxer::open(in_file)
+        .into_diagnostic()
+        .wrap_err("failed to parse MP4 container")?;
+
+    // Read track info and codec configs before moving demuxer into pipeline
+    let tracks = demuxer.tracks().to_vec();
+    let mut video_track_configs: Vec<(TrackIndex, Vec<u8>)> = Vec::new();
+
+    for track in &tracks {
+        if track.kind == TrackKind::Video {
+            if let Codec::Video(VideoCodec::H264) = &track.codec {
+                if let Some(CodecConfig::Avc1 { avcc, .. }) = demuxer.codec_config(track.index) {
+                    video_track_configs.push((track.index, avcc.to_vec()));
+                }
+            }
+        }
+    }
+
+    if video_track_configs.is_empty() {
+        return Err(miette::miette!(
+            "no H.264 video tracks found in '{}' — transcode currently supports H.264 only",
+            input.display()
+        ));
+    }
+
+    let out_file = File::create(output)
+        .into_diagnostic()
+        .wrap_err_with(|| format!("could not create output file '{}'", output.display()))?;
+
+    let muxer = Mp4Muxer::new(BufWriter::new(out_file));
+
+    // Build pipeline: video tracks get decoder+encoder, audio tracks copy through
+    let mut builder = PipelineBuilder::new()
+        .with_event_handler(|event| match event.kind {
+            PipelineEventKind::PacketsRead { count } if count % 100 == 0 => {
+                eprint!("\r  Packets read: {count}");
+            }
+            PipelineEventKind::FramesDecoded { count } if count % 100 == 0 => {
+                eprint!("  Decoded: {count}");
+            }
+            PipelineEventKind::FramesEncoded { count } if count % 100 == 0 => {
+                eprint!("  Encoded: {count}");
+            }
+            _ => {}
+        })
+        .with_demuxer(demuxer)
+        .with_muxer(muxer);
+
+    for (track_idx, avcc_data) in &video_track_configs {
+        let decoder = H264Decoder::new(avcc_data)
+            .into_diagnostic()
+            .wrap_err("failed to create H.264 decoder")?;
+
+        let encoder = H264EncoderBuilder::new()
+            .bitrate(bitrate_bps)
+            .track_index(*track_idx)
+            .build()
+            .into_diagnostic()
+            .wrap_err("failed to create H.264 encoder")?;
+
+        builder = builder.with_decoder(*track_idx, decoder);
+        builder = builder.with_encoder(*track_idx, encoder);
+    }
+
+    let mut pipeline = builder
+        .build()
+        .into_diagnostic()
+        .wrap_err("failed to build transcode pipeline")?;
+
+    eprintln!(
+        "Transcoding {} → {} (H.264, {} kbps)",
+        input.display(),
+        output.display(),
+        bitrate_bps / 1000
+    );
+
+    pipeline
+        .run()
+        .into_diagnostic()
+        .wrap_err("transcode failed")?;
+
+    eprintln!("\r  Done.                                        ");
 
     Ok(())
 }

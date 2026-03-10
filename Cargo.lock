@@ -491,6 +491,7 @@ dependencies = [
  "miette",
  "serde",
  "serde_json",
+ "splica-codec",
  "splica-core",
  "splica-mp4",
  "splica-pipeline",
