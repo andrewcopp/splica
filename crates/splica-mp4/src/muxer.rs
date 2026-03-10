@@ -11,8 +11,8 @@ use std::io::{Seek, SeekFrom, Write};
 use splica_core::{MuxError, Muxer, Packet, ResourceBudget, TrackIndex, TrackInfo, TrackKind};
 
 use crate::box_builders::{
-    build_dinf, build_hdlr, build_mdhd, build_mvhd, build_smhd, build_stsd, build_tkhd,
-    build_vmhd, io_err, make_box, make_full_box,
+    build_dinf, build_hdlr, build_mdhd, build_mvhd, build_smhd, build_stsd, build_tkhd, build_vmhd,
+    io_err, make_box, make_full_box,
 };
 use crate::boxes::stsd::CodecConfig;
 use crate::metadata::MetadataBox;
@@ -346,7 +346,6 @@ impl<W: Write + Seek> Mp4Muxer<W> {
         trak_body.extend_from_slice(&mdia);
         Ok(make_box(b"trak", &trak_body))
     }
-
 }
 
 impl<W: Write + Seek> Muxer for Mp4Muxer<W> {
@@ -517,4 +516,3 @@ fn build_stss(samples: &[(u64, u32, i64, i32, bool)]) -> Option<Vec<u8>> {
     }
     Some(make_full_box(b"stss", &body))
 }
-

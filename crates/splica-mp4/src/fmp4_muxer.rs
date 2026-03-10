@@ -22,8 +22,8 @@ use std::io::Write;
 use splica_core::{MuxError, Muxer, Packet, TrackIndex, TrackInfo, TrackKind};
 
 use crate::box_builders::{
-    build_dinf, build_hdlr, build_mdhd, build_mvhd, build_smhd, build_stsd, build_tkhd,
-    build_vmhd, io_err, make_box, make_full_box,
+    build_dinf, build_hdlr, build_mdhd, build_mvhd, build_smhd, build_stsd, build_tkhd, build_vmhd,
+    io_err, make_box, make_full_box,
 };
 use crate::boxes::stsd::CodecConfig;
 
@@ -532,4 +532,3 @@ fn build_trun(samples: &[FragmentSample], data_offset: u32) -> Vec<u8> {
 
     make_full_box(b"trun", &body)
 }
-

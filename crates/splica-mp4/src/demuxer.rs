@@ -57,7 +57,9 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
     /// Needed for stream-copy muxing where the muxer needs the raw codec
     /// configuration (avcC, esds, etc.) to write sample description boxes.
     pub fn codec_config(&self, track: TrackIndex) -> Option<&stsd::CodecConfig> {
-        self.mp4_tracks.get(track.0 as usize).map(|t| &t.codec_config)
+        self.mp4_tracks
+            .get(track.0 as usize)
+            .map(|t| &t.codec_config)
     }
 
     /// Returns the media timescale for a given track index.
