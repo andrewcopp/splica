@@ -103,6 +103,10 @@ enum Commands {
         /// Aspect ratio handling when resizing (default: fit).
         #[arg(long, default_value = "fit")]
         aspect_mode: AspectModeArg,
+
+        /// Output format for results (text or json).
+        #[arg(long, default_value = "text")]
+        format: OutputFormat,
     },
 }
 
@@ -134,6 +138,43 @@ enum AspectModeArg {
     Fill,
 }
 
+// ---------------------------------------------------------------------------
+// Exit codes
+// ---------------------------------------------------------------------------
+
+/// Structured exit codes for automation.
+#[allow(dead_code)]
+mod exit_code {
+    /// Success.
+    pub const SUCCESS: i32 = 0;
+    /// Bad input: malformed file, unsupported format, invalid arguments. Do not retry.
+    pub const BAD_INPUT: i32 = 1;
+    /// Internal error: encoder/muxer failure. May retry.
+    pub const INTERNAL: i32 = 2;
+}
+
+// ---------------------------------------------------------------------------
+// Transcode JSON output
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize)]
+struct TranscodeResult {
+    status: String,
+    input: String,
+    output: String,
+    packets_read: u64,
+    frames_decoded: u64,
+    frames_encoded: u64,
+    packets_written: u64,
+}
+
+#[derive(Serialize)]
+struct ErrorResult {
+    status: String,
+    error_kind: String,
+    message: String,
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
@@ -155,6 +196,7 @@ fn main() -> Result<()> {
             max_fps,
             resize,
             aspect_mode,
+            format,
         } => transcode(
             &input,
             &output,
@@ -163,6 +205,7 @@ fn main() -> Result<()> {
             max_fps,
             resize.as_deref(),
             &aspect_mode,
+            &format,
         ),
     }
 }
@@ -818,7 +861,65 @@ fn transcode(
     max_fps: Option<f32>,
     resize: Option<&str>,
     aspect_mode_arg: &AspectModeArg,
+    format: &OutputFormat,
 ) -> Result<()> {
+    let json_mode = matches!(format, OutputFormat::Json);
+
+    // In JSON mode, catch errors and emit structured JSON instead of miette output
+    let result = transcode_inner(
+        input,
+        output,
+        bitrate,
+        preset,
+        max_fps,
+        resize,
+        aspect_mode_arg,
+        json_mode,
+    );
+
+    if json_mode {
+        match result {
+            Ok((packets_read, frames_decoded, frames_encoded, packets_written)) => {
+                let output_json = TranscodeResult {
+                    status: "ok".to_string(),
+                    input: input.display().to_string(),
+                    output: output.display().to_string(),
+                    packets_read,
+                    frames_decoded,
+                    frames_encoded,
+                    packets_written,
+                };
+                println!("{}", serde_json::to_string_pretty(&output_json).unwrap());
+                Ok(())
+            }
+            Err(e) => {
+                let error_json = ErrorResult {
+                    status: "error".to_string(),
+                    error_kind: "bad_input".to_string(),
+                    message: format!("{e}"),
+                };
+                println!("{}", serde_json::to_string_pretty(&error_json).unwrap());
+                std::process::exit(exit_code::BAD_INPUT);
+            }
+        }
+    } else {
+        match result {
+            Ok(_) => Ok(()),
+            Err(e) => Err(e),
+        }
+    }
+}
+
+fn transcode_inner(
+    input: &PathBuf,
+    output: &PathBuf,
+    bitrate: Option<&str>,
+    preset: &EncodePreset,
+    max_fps: Option<f32>,
+    resize: Option<&str>,
+    aspect_mode_arg: &AspectModeArg,
+    json_mode: bool,
+) -> Result<(u64, u64, u64, u64)> {
     validate_output_format(output)?;
     let bitrate_bps = match bitrate {
         Some(s) => parse_bitrate(s)?,
@@ -864,17 +965,43 @@ fn transcode(
 
     let muxer = Mp4Muxer::new(BufWriter::new(out_file));
 
+    // Shared counters for JSON output
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Arc;
+
+    let counter_packets_read = Arc::new(AtomicU64::new(0));
+    let counter_frames_decoded = Arc::new(AtomicU64::new(0));
+    let counter_frames_encoded = Arc::new(AtomicU64::new(0));
+    let counter_packets_written = Arc::new(AtomicU64::new(0));
+
+    let pr = Arc::clone(&counter_packets_read);
+    let fd = Arc::clone(&counter_frames_decoded);
+    let fe = Arc::clone(&counter_frames_encoded);
+    let pw = Arc::clone(&counter_packets_written);
+
     // Build pipeline: video tracks get decoder+encoder, audio tracks copy through
     let mut builder = PipelineBuilder::new()
-        .with_event_handler(|event| match event.kind {
-            PipelineEventKind::PacketsRead { count } if count % 100 == 0 => {
-                eprint!("\r  Packets read: {count}");
+        .with_event_handler(move |event| match event.kind {
+            PipelineEventKind::PacketsRead { count } => {
+                pr.store(count, Ordering::Relaxed);
+                if !json_mode && count % 100 == 0 {
+                    eprint!("\r  Packets read: {count}");
+                }
             }
-            PipelineEventKind::FramesDecoded { count } if count % 100 == 0 => {
-                eprint!("  Decoded: {count}");
+            PipelineEventKind::FramesDecoded { count } => {
+                fd.store(count, Ordering::Relaxed);
+                if !json_mode && count % 100 == 0 {
+                    eprint!("  Decoded: {count}");
+                }
             }
-            PipelineEventKind::FramesEncoded { count } if count % 100 == 0 => {
-                eprint!("  Encoded: {count}");
+            PipelineEventKind::FramesEncoded { count } => {
+                fe.store(count, Ordering::Relaxed);
+                if !json_mode && count % 100 == 0 {
+                    eprint!("  Encoded: {count}");
+                }
+            }
+            PipelineEventKind::PacketsWritten { count } => {
+                pw.store(count, Ordering::Relaxed);
             }
             _ => {}
         })
@@ -941,7 +1068,14 @@ fn transcode(
         .into_diagnostic()
         .wrap_err("transcode failed")?;
 
-    eprintln!("\r  Done.                                        ");
+    if !json_mode {
+        eprintln!("\r  Done.                                        ");
+    }
 
-    Ok(())
+    Ok((
+        counter_packets_read.load(Ordering::Relaxed),
+        counter_frames_decoded.load(Ordering::Relaxed),
+        counter_frames_encoded.load(Ordering::Relaxed),
+        counter_packets_written.load(Ordering::Relaxed),
+    ))
 }
