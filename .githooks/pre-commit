@@ -1,0 +1,14 @@
+#!/bin/sh
+
+# Check that code is formatted before committing.
+# To enable: git config core.hooksPath .githooks
+
+if ! cargo fmt --check > /dev/null 2>&1; then
+    echo "error: cargo fmt check failed. Run 'cargo fmt' and stage the changes."
+    exit 1
+fi
+
+if ! cargo test > /dev/null 2>&1; then
+    echo "error: cargo test failed. Fix failing tests before committing."
+    exit 1
+fi

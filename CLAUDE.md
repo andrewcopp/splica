@@ -26,6 +26,7 @@ cargo clippy --all-targets           # Lint
 cargo fmt --check                    # Check formatting
 cargo fmt                            # Auto-format
 cargo bench                          # Run benchmarks
+git config core.hooksPath .githooks  # Enable pre-commit hook (one-time setup)
 ```
 
 ## Workspace Architecture
