@@ -291,3 +291,88 @@ fn test_that_webm_demuxer_reports_audio_settings() {
 
     assert_eq!(audio.sample_rate, 48000);
 }
+
+/// A reader wrapper that tracks total bytes read via a shared counter,
+/// proving the demuxer doesn't read the entire file during open().
+struct TrackingReader<R> {
+    inner: R,
+    bytes_read: std::rc::Rc<std::cell::Cell<usize>>,
+}
+
+impl<R> TrackingReader<R> {
+    fn new(inner: R) -> (Self, std::rc::Rc<std::cell::Cell<usize>>) {
+        let counter = std::rc::Rc::new(std::cell::Cell::new(0));
+        (
+            Self {
+                inner,
+                bytes_read: counter.clone(),
+            },
+            counter,
+        )
+    }
+}
+
+impl<R: std::io::Read> std::io::Read for TrackingReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        self.bytes_read.set(self.bytes_read.get() + n);
+        Ok(n)
+    }
+}
+
+impl<R: std::io::Seek> std::io::Seek for TrackingReader<R> {
+    fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
+        self.inner.seek(pos)
+    }
+}
+
+#[test]
+fn test_that_open_does_not_read_cluster_data() {
+    // Build a WebM with enough frames that cluster data is significant
+    let frames: Vec<(i16, bool, &[u8])> = (0..100)
+        .map(|i| {
+            let ts = i as i16;
+            let kf = i == 0;
+            (ts, kf, &[0xAA, 0xBB, 0xCC, 0xDD][..])
+        })
+        .collect();
+    let data = build_minimal_webm(&frames);
+    let total_file_size = data.len();
+
+    let (tracking, counter) = TrackingReader::new(Cursor::new(data));
+    let demuxer = WebmDemuxer::open(tracking).unwrap();
+
+    // open() should have read far less than the full file
+    // (only EBML header + Info + Tracks, not the cluster data)
+    let bytes_read = counter.get();
+    assert!(
+        bytes_read < total_file_size,
+        "open() read {bytes_read} bytes but file is {total_file_size} bytes — \
+         should not read cluster data during open"
+    );
+
+    // Verify the demuxer still works correctly
+    assert_eq!(demuxer.tracks().len(), 1);
+}
+
+#[test]
+fn test_that_streaming_read_yields_all_packets() {
+    let frames: Vec<(i16, bool, &[u8])> = (0..10)
+        .map(|i| {
+            let ts = i as i16;
+            let kf = i == 0;
+            (ts, kf, &[0xAA, 0xBB][..])
+        })
+        .collect();
+    let data = build_minimal_webm(&frames);
+
+    let cursor = Cursor::new(data);
+    let mut demuxer = WebmDemuxer::open(cursor).unwrap();
+
+    let mut count = 0;
+    while demuxer.read_packet().unwrap().is_some() {
+        count += 1;
+    }
+
+    assert_eq!(count, 10);
+}

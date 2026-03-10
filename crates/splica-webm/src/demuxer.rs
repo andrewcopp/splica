@@ -67,97 +67,89 @@ pub struct WebmDemuxer<R> {
 }
 
 impl<R: Read + Seek> WebmDemuxer<R> {
-    /// Opens a WebM file and parses its metadata.
+    /// Opens a WebM file and parses only its metadata (EBML header, Info, Tracks).
+    ///
+    /// Clusters are not read into memory — they are read on-demand during
+    /// `read_packet()` calls. This keeps memory usage bounded regardless of
+    /// file size.
     pub fn open(mut reader: R) -> Result<Self, WebmError> {
         let file_size = reader.seek(SeekFrom::End(0))?;
         reader.seek(SeekFrom::Start(0))?;
 
-        // Read the entire file for simplicity (WebM files are typically
-        // small enough for this approach; streaming would use incremental reads)
-        let mut data = Vec::with_capacity(file_size as usize);
-        reader.read_to_end(&mut data)?;
-        reader.seek(SeekFrom::Start(0))?;
-
-        let mut pos: usize = 0;
-
         // Parse EBML header
-        let ebml_header = ebml::parse_element_header(&data[pos..], pos as u64)?;
+        let (ebml_header, _) = read_element_header_from_reader(&mut reader, 0)?;
         if ebml_header.id != elements::EBML {
             return Err(WebmError::NotWebm);
         }
-        let ebml_size = ebml_header.data_size.ok_or(WebmError::NotWebm)?;
-        let ebml_body_start = pos + ebml_header.header_size;
-        let ebml_body = &data[ebml_body_start..ebml_body_start + ebml_size as usize];
+        let ebml_size = ebml_header.data_size.ok_or(WebmError::NotWebm)? as usize;
 
-        // Verify docType is "webm"
-        let doc_type = parse_ebml_doc_type(ebml_body, ebml_body_start as u64)?;
+        // Read EBML header body to verify docType
+        let mut ebml_body = vec![0u8; ebml_size];
+        reader.read_exact(&mut ebml_body)?;
+        let ebml_body_offset = ebml_header.header_size as u64;
+
+        let doc_type = parse_ebml_doc_type(&ebml_body, ebml_body_offset)?;
         if doc_type != "webm" && doc_type != "matroska" {
             return Err(WebmError::NotWebm);
         }
 
-        pos = ebml_body_start + ebml_size as usize;
+        let segment_start = ebml_header.header_size as u64 + ebml_size as u64;
 
-        // Parse Segment
-        if pos >= data.len() {
-            return Err(WebmError::MissingElement { name: "Segment" });
-        }
-        let segment_header = ebml::parse_element_header(&data[pos..], pos as u64)?;
+        // Parse Segment header
+        reader.seek(SeekFrom::Start(segment_start))?;
+        let (segment_header, _) = read_element_header_from_reader(&mut reader, segment_start)?;
         if segment_header.id != elements::SEGMENT {
             return Err(WebmError::MissingElement { name: "Segment" });
         }
-        let segment_body_start = pos + segment_header.header_size;
-
-        // Parse Segment children: Info, Tracks, and find where Clusters start
-        let mut timestamp_scale: u64 = 1_000_000; // default
-        let mut webm_tracks: Vec<WebmTrack> = Vec::new();
-        let mut cluster_start: usize = 0;
-
-        let mut child_pos = segment_body_start;
+        let segment_body_start = segment_start + segment_header.header_size as u64;
         let segment_end = match segment_header.data_size {
-            Some(size) => segment_body_start + size as usize,
-            None => data.len(),
+            Some(size) => segment_body_start + size,
+            None => file_size,
         };
 
-        while child_pos < segment_end && child_pos < data.len() {
-            let child_header =
-                match ebml::parse_element_header(&data[child_pos..], child_pos as u64) {
+        // Iterate segment children: read only Info and Tracks bodies, skip the rest
+        let mut timestamp_scale: u64 = 1_000_000;
+        let mut webm_tracks: Vec<WebmTrack> = Vec::new();
+        let mut cluster_start: u64 = 0;
+
+        let mut child_pos = segment_body_start;
+        reader.seek(SeekFrom::Start(child_pos))?;
+
+        while child_pos < segment_end && child_pos < file_size {
+            let (child_header, header_bytes_read) =
+                match read_element_header_from_reader(&mut reader, child_pos) {
                     Ok(h) => h,
                     Err(_) => break,
                 };
 
-            let child_body_start = child_pos + child_header.header_size;
+            let child_body_offset = child_pos + header_bytes_read as u64;
             let child_size = match child_header.data_size {
-                Some(s) => s as usize,
-                None => {
-                    // Unknown size — scan forward for known elements
-                    // For now, treat as end of parseable data
-                    break;
-                }
+                Some(s) => s,
+                None => break,
             };
-
-            if child_body_start + child_size > data.len() {
-                break;
-            }
-
-            let child_body = &data[child_body_start..child_body_start + child_size];
 
             match child_header.id {
                 elements::INFO => {
-                    timestamp_scale = parse_info(child_body, child_body_start as u64)?;
+                    let mut body = vec![0u8; child_size as usize];
+                    reader.read_exact(&mut body)?;
+                    timestamp_scale = parse_info(&body, child_body_offset)?;
                 }
                 elements::TRACKS => {
-                    webm_tracks = parse_tracks(child_body, child_body_start as u64)?;
+                    let mut body = vec![0u8; child_size as usize];
+                    reader.read_exact(&mut body)?;
+                    webm_tracks = parse_tracks(&body, child_body_offset)?;
                 }
                 elements::CLUSTER => {
                     cluster_start = child_pos;
-                    break; // Stop parsing top-level elements once we hit clusters
+                    break;
                 }
                 _ => {
                     // Skip unknown elements (SeekHead, Cues, etc.)
+                    reader.seek(SeekFrom::Start(child_body_offset + child_size))?;
                 }
             }
 
-            child_pos = child_body_start + child_size;
+            child_pos = child_body_offset + child_size;
         }
 
         if webm_tracks.is_empty() {
@@ -177,8 +169,8 @@ impl<R: Read + Seek> WebmDemuxer<R> {
             webm_tracks,
             timestamp_scale,
             cluster_timestamp: 0,
-            cluster_start: cluster_start as u64,
-            position: cluster_start as u64,
+            cluster_start,
+            position: cluster_start,
             file_size,
             eof: cluster_start == 0,
             packet_buffer: Vec::new(),
@@ -349,6 +341,44 @@ impl<R: Read + Seek> Demuxer for WebmDemuxer<R> {
 // ---------------------------------------------------------------------------
 // Parsing helpers
 // ---------------------------------------------------------------------------
+
+/// Reads an EBML element header directly from a reader without buffering the
+/// entire file. Seeks the reader to just after the header (start of body).
+/// Returns the parsed header and the number of bytes consumed.
+fn read_element_header_from_reader<R: Read + Seek>(
+    reader: &mut R,
+    offset: u64,
+) -> Result<(ebml::ElementHeader, usize), WebmError> {
+    // Element headers are at most 12 bytes (4-byte ID + 8-byte size)
+    let mut buf = [0u8; 12];
+    // Read enough for at least a minimal header (2 bytes)
+    let mut filled = 0;
+    while filled < 2 {
+        let n = reader.read(&mut buf[filled..])?;
+        if n == 0 {
+            return Err(WebmError::UnexpectedEof { offset });
+        }
+        filled += n;
+    }
+    // Try parsing; if we need more bytes, read more
+    loop {
+        match ebml::parse_element_header(&buf[..filled], offset) {
+            Ok(header) => {
+                // Seek reader to start of element body
+                reader.seek(SeekFrom::Start(offset + header.header_size as u64))?;
+                return Ok((header, header.header_size));
+            }
+            Err(_) if filled < buf.len() => {
+                let n = reader.read(&mut buf[filled..])?;
+                if n == 0 {
+                    return Err(WebmError::UnexpectedEof { offset });
+                }
+                filled += n;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
 
 fn parse_ebml_doc_type(data: &[u8], base_offset: u64) -> Result<String, WebmError> {
     let mut pos: usize = 0;
