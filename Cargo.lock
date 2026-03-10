@@ -546,6 +546,7 @@ dependencies = [
 name = "splica-pipeline"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "splica-codec",
  "splica-core",
  "splica-filter",
