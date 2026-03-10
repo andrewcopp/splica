@@ -16,6 +16,9 @@ Thumbs.db
 .env
 .env.local
 
+# Claude Code (user-specific settings)
+.claude/settings.local.json
+
 # Test fixtures (large media files)
 tests/fixtures/*.mp4
 tests/fixtures/*.mkv
