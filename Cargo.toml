@@ -27,4 +27,5 @@ splica-filter = { path = "crates/splica-filter" }
 splica-pipeline = { path = "crates/splica-pipeline" }
 splica-cli = { path = "crates/splica-cli" }
 
+bytes = "1"
 thiserror = "2"
