@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::BufWriter;
+use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom};
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
@@ -11,6 +11,7 @@ use splica_core::{Codec, Demuxer, Muxer, TrackIndex, TrackKind, VideoCodec};
 use splica_mp4::boxes::stsd::CodecConfig;
 use splica_mp4::{Mp4Demuxer, Mp4Muxer};
 use splica_pipeline::{PipelineBuilder, PipelineEventKind};
+use splica_webm::WebmDemuxer;
 
 #[derive(Parser)]
 #[command(name = "splica", version, about = "Media processing tool")]
@@ -170,6 +171,83 @@ fn parse_time(s: &str) -> Result<f64> {
 }
 
 // ---------------------------------------------------------------------------
+// Format detection
+// ---------------------------------------------------------------------------
+
+/// Detected container format.
+enum ContainerFormat {
+    Mp4,
+    WebM,
+}
+
+/// Sniffs the container format from the first few bytes of a file.
+fn detect_format(file: &mut (impl Read + Seek)) -> Result<ContainerFormat> {
+    let mut magic = [0u8; 12];
+    let bytes_read = file
+        .read(&mut magic)
+        .into_diagnostic()
+        .wrap_err("could not read file header")?;
+    file.seek(SeekFrom::Start(0))
+        .into_diagnostic()
+        .wrap_err("could not seek back to start")?;
+
+    if bytes_read < 4 {
+        return Err(miette::miette!(
+            "file too small to detect format ({bytes_read} bytes)"
+        ));
+    }
+
+    // WebM/Matroska: EBML header starts with 0x1A 0x45 0xDF 0xA3
+    if magic[0] == 0x1A && magic[1] == 0x45 && magic[2] == 0xDF && magic[3] == 0xA3 {
+        return Ok(ContainerFormat::WebM);
+    }
+
+    // MP4: "ftyp" box at bytes 4-7
+    if bytes_read >= 8 && &magic[4..8] == b"ftyp" {
+        return Ok(ContainerFormat::Mp4);
+    }
+
+    Err(miette::miette!(
+        "unsupported container format — splica supports MP4 and WebM"
+    ))
+}
+
+/// Opens a demuxer for the given file, auto-detecting the container format.
+fn open_demuxer(path: &PathBuf) -> Result<Box<dyn Demuxer>> {
+    let mut file = File::open(path)
+        .into_diagnostic()
+        .wrap_err_with(|| format!("could not open file '{}'", path.display()))?;
+
+    let format = detect_format(&mut file)?;
+
+    match format {
+        ContainerFormat::Mp4 => {
+            let demuxer = Mp4Demuxer::open(file)
+                .into_diagnostic()
+                .wrap_err("failed to parse MP4 container")?;
+            Ok(Box::new(demuxer))
+        }
+        ContainerFormat::WebM => {
+            let demuxer = WebmDemuxer::open(BufReader::new(file))
+                .into_diagnostic()
+                .wrap_err("failed to parse WebM container")?;
+            Ok(Box::new(demuxer))
+        }
+    }
+}
+
+/// Opens an MP4 demuxer specifically (for commands needing codec config access).
+fn open_mp4_demuxer(path: &PathBuf) -> Result<Mp4Demuxer<File>> {
+    let file = File::open(path)
+        .into_diagnostic()
+        .wrap_err_with(|| format!("could not open file '{}'", path.display()))?;
+
+    Mp4Demuxer::open(file)
+        .into_diagnostic()
+        .wrap_err("failed to parse MP4 container")
+}
+
+// ---------------------------------------------------------------------------
 // probe
 // ---------------------------------------------------------------------------
 
@@ -201,13 +279,7 @@ struct ProbeTrack {
 }
 
 fn probe(file: &PathBuf, format: &OutputFormat) -> Result<()> {
-    let in_file = File::open(file)
-        .into_diagnostic()
-        .wrap_err_with(|| format!("could not open file '{}'", file.display()))?;
-
-    let demuxer = Mp4Demuxer::open(in_file)
-        .into_diagnostic()
-        .wrap_err("failed to parse MP4 container")?;
+    let demuxer = open_demuxer(file)?;
 
     let tracks: Vec<ProbeTrack> = demuxer
         .tracks()
@@ -309,13 +381,7 @@ fn format_codec(codec: &splica_core::Codec) -> String {
 // ---------------------------------------------------------------------------
 
 fn convert(input: &PathBuf, output: &PathBuf) -> Result<()> {
-    let in_file = File::open(input)
-        .into_diagnostic()
-        .wrap_err_with(|| format!("could not open input file '{}'", input.display()))?;
-
-    let mut demuxer = Mp4Demuxer::open(in_file)
-        .into_diagnostic()
-        .wrap_err("failed to parse MP4 container")?;
+    let mut demuxer = open_demuxer(input)?;
 
     let out_file = File::create(output)
         .into_diagnostic()
@@ -366,13 +432,7 @@ fn trim(input: &PathBuf, output: &PathBuf, start: Option<&str>, end: Option<&str
     let start_secs = start.map(parse_time).transpose()?;
     let end_secs = end.map(parse_time).transpose()?;
 
-    let in_file = File::open(input)
-        .into_diagnostic()
-        .wrap_err_with(|| format!("could not open input file '{}'", input.display()))?;
-
-    let mut demuxer = Mp4Demuxer::open(in_file)
-        .into_diagnostic()
-        .wrap_err("failed to parse MP4 container")?;
+    let mut demuxer = open_mp4_demuxer(input).wrap_err("trim currently requires MP4 input")?;
 
     let out_file = File::create(output)
         .into_diagnostic()
@@ -473,13 +533,8 @@ fn trim(input: &PathBuf, output: &PathBuf, start: Option<&str>, end: Option<&str
 // ---------------------------------------------------------------------------
 
 fn extract_audio(input: &PathBuf, output: &PathBuf) -> Result<()> {
-    let in_file = File::open(input)
-        .into_diagnostic()
-        .wrap_err_with(|| format!("could not open input file '{}'", input.display()))?;
-
-    let mut demuxer = Mp4Demuxer::open(in_file)
-        .into_diagnostic()
-        .wrap_err("failed to parse MP4 container")?;
+    let mut demuxer =
+        open_mp4_demuxer(input).wrap_err("extract-audio currently requires MP4 input")?;
 
     // Find audio tracks
     let audio_tracks: Vec<(usize, splica_core::TrackInfo)> = demuxer
@@ -607,13 +662,7 @@ fn transcode(input: &PathBuf, output: &PathBuf, bitrate: Option<&str>) -> Result
         None => 1_000_000, // 1 Mbps default
     };
 
-    let in_file = File::open(input)
-        .into_diagnostic()
-        .wrap_err_with(|| format!("could not open input file '{}'", input.display()))?;
-
-    let demuxer = Mp4Demuxer::open(in_file)
-        .into_diagnostic()
-        .wrap_err("failed to parse MP4 container")?;
+    let demuxer = open_mp4_demuxer(input).wrap_err("transcode currently requires MP4 input")?;
 
     // Read track info and codec configs before moving demuxer into pipeline
     let tracks = demuxer.tracks().to_vec();

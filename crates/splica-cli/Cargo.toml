@@ -16,6 +16,7 @@ splica-core.workspace = true
 splica-codec = { workspace = true, features = ["codec-h264"] }
 splica-mp4.workspace = true
 splica-pipeline.workspace = true
+splica-webm.workspace = true
 clap = { version = "4", features = ["derive"] }
 miette = { version = "7", features = ["fancy"] }
 serde = { version = "1", features = ["derive"] }
