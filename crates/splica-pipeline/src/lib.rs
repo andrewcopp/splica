@@ -10,15 +10,18 @@ pub mod event;
 use std::collections::HashMap;
 
 pub use event::{PipelineEvent, PipelineEventKind};
-use splica_core::{Decoder, Demuxer, Encoder, Muxer, PipelineError, TrackIndex};
+use splica_core::{
+    Decoder, Demuxer, Encoder, Frame, Muxer, PipelineError, TrackIndex, VideoFilter,
+};
 
 /// How the pipeline should handle a track.
 #[allow(dead_code)] // Copy variant used once stream-copy mode is wired up
 enum TrackMode {
-    /// Decode → encode: full transcode path.
+    /// Decode → filter → encode: full transcode path.
     Transcode {
         decoder: Box<dyn Decoder>,
         encoder: Box<dyn Encoder>,
+        filters: Vec<Box<dyn VideoFilter>>,
     },
     /// Copy: pass compressed packets directly to the muxer.
     Copy,
@@ -49,6 +52,7 @@ pub struct PipelineBuilder<F = fn(PipelineEvent)> {
     muxer: Option<Box<dyn Muxer>>,
     decoders: HashMap<TrackIndex, Box<dyn Decoder>>,
     encoders: HashMap<TrackIndex, Box<dyn Encoder>>,
+    filters: HashMap<TrackIndex, Vec<Box<dyn VideoFilter>>>,
 }
 
 impl PipelineBuilder {
@@ -60,6 +64,7 @@ impl PipelineBuilder {
             muxer: None,
             decoders: HashMap::new(),
             encoders: HashMap::new(),
+            filters: HashMap::new(),
         }
     }
 }
@@ -79,6 +84,7 @@ impl<F: Fn(PipelineEvent)> PipelineBuilder<F> {
             muxer: self.muxer,
             decoders: self.decoders,
             encoders: self.encoders,
+            filters: self.filters,
         }
     }
 
@@ -107,6 +113,19 @@ impl<F: Fn(PipelineEvent)> PipelineBuilder<F> {
     /// Must be paired with a decoder for the same track.
     pub fn with_encoder(mut self, track: TrackIndex, encoder: impl Encoder + 'static) -> Self {
         self.encoders.insert(track, Box::new(encoder));
+        self
+    }
+
+    /// Registers a video filter for a specific track.
+    ///
+    /// Filters are applied in order after decode and before encode.
+    /// Multiple filters can be added per track by calling this multiple times.
+    /// Only applies to tracks in transcode mode (with decoder + encoder).
+    pub fn with_filter(mut self, track: TrackIndex, filter: impl VideoFilter + 'static) -> Self {
+        self.filters
+            .entry(track)
+            .or_default()
+            .push(Box::new(filter));
         self
     }
 
@@ -150,7 +169,15 @@ impl<F: Fn(PipelineEvent)> PipelineBuilder<F> {
         let mut track_modes: HashMap<TrackIndex, TrackMode> = HashMap::new();
         for (track, decoder) in self.decoders.drain() {
             let encoder = self.encoders.remove(&track).expect("validated above");
-            track_modes.insert(track, TrackMode::Transcode { decoder, encoder });
+            let filters = self.filters.remove(&track).unwrap_or_default();
+            track_modes.insert(
+                track,
+                TrackMode::Transcode {
+                    decoder,
+                    encoder,
+                    filters,
+                },
+            );
         }
 
         Ok(Pipeline {
@@ -187,11 +214,12 @@ fn emit_event<F: Fn(PipelineEvent)>(on_event: &Option<F>, kind: PipelineEventKin
     }
 }
 
-/// Drains all available frames from a decoder, encodes them, and writes
-/// resulting packets to the muxer.
+/// Drains all available frames from a decoder, applies filters, encodes them,
+/// and writes resulting packets to the muxer.
 fn drain_decoder_to_muxer<F: Fn(PipelineEvent)>(
     decoder: &mut dyn Decoder,
     encoder: &mut dyn Encoder,
+    filters: &mut [Box<dyn VideoFilter>],
     muxer: &mut dyn Muxer,
     output_track: TrackIndex,
     on_event: &Option<F>,
@@ -206,7 +234,23 @@ fn drain_decoder_to_muxer<F: Fn(PipelineEvent)>(
             },
         );
 
-        encoder.send_frame(Some(&frame))?;
+        // Apply video filters if the frame is video
+        let filtered_frame = if filters.is_empty() {
+            frame
+        } else {
+            match frame {
+                Frame::Video(vf) => {
+                    let mut current = vf;
+                    for filter in filters.iter_mut() {
+                        current = filter.process(current)?;
+                    }
+                    Frame::Video(current)
+                }
+                other => other, // Audio frames pass through unmodified
+            }
+        };
+
+        encoder.send_frame(Some(&filtered_frame))?;
         drain_encoder_to_muxer(encoder, muxer, output_track, on_event, counters)?;
     }
     Ok(())
@@ -294,11 +338,16 @@ impl<F: Fn(PipelineEvent)> Pipeline<F> {
                     })?;
 
             match self.track_modes.get_mut(&input_track) {
-                Some(TrackMode::Transcode { decoder, encoder }) => {
+                Some(TrackMode::Transcode {
+                    decoder,
+                    encoder,
+                    filters,
+                }) => {
                     decoder.send_packet(Some(&packet))?;
                     drain_decoder_to_muxer(
                         decoder.as_mut(),
                         encoder.as_mut(),
+                        filters,
                         self.muxer.as_mut(),
                         output_track,
                         &self.on_event,
@@ -325,14 +374,18 @@ impl<F: Fn(PipelineEvent)> Pipeline<F> {
         let track_indices: Vec<TrackIndex> = self.track_modes.keys().copied().collect();
         for track_idx in track_indices {
             let output_track = input_to_output[&track_idx];
-            if let Some(TrackMode::Transcode { decoder, encoder }) =
-                self.track_modes.get_mut(&track_idx)
+            if let Some(TrackMode::Transcode {
+                decoder,
+                encoder,
+                filters,
+            }) = self.track_modes.get_mut(&track_idx)
             {
                 // Signal end-of-stream to decoder, drain remaining frames
                 decoder.send_packet(None)?;
                 drain_decoder_to_muxer(
                     decoder.as_mut(),
                     encoder.as_mut(),
+                    filters,
                     self.muxer.as_mut(),
                     output_track,
                     &self.on_event,

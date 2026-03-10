@@ -8,6 +8,7 @@ use serde::Serialize;
 
 use splica_codec::{H264Decoder, H264EncoderBuilder};
 use splica_core::{Codec, Demuxer, Muxer, TrackIndex, TrackKind, VideoCodec};
+use splica_filter::{AspectMode, ScaleFilter};
 use splica_mp4::boxes::stsd::CodecConfig;
 use splica_mp4::{Mp4Demuxer, Mp4Muxer};
 use splica_pipeline::{PipelineBuilder, PipelineEventKind};
@@ -94,6 +95,14 @@ enum Commands {
         /// Maximum frame rate hint for the encoder (e.g., 30, 60).
         #[arg(long)]
         max_fps: Option<f32>,
+
+        /// Resize video to WxH (e.g., "1280x720", "640x480").
+        #[arg(long)]
+        resize: Option<String>,
+
+        /// Aspect ratio handling when resizing (default: fit).
+        #[arg(long, default_value = "fit")]
+        aspect_mode: AspectModeArg,
     },
 }
 
@@ -112,6 +121,17 @@ enum EncodePreset {
 enum OutputFormat {
     Text,
     Json,
+}
+
+/// CLI argument for aspect ratio handling.
+#[derive(Clone, ValueEnum)]
+enum AspectModeArg {
+    /// Stretch to fill target (may distort).
+    Stretch,
+    /// Fit within target, adding black bars.
+    Fit,
+    /// Fill target, cropping excess.
+    Fill,
 }
 
 fn main() -> Result<()> {
@@ -133,7 +153,17 @@ fn main() -> Result<()> {
             bitrate,
             preset,
             max_fps,
-        } => transcode(&input, &output, bitrate.as_deref(), &preset, max_fps),
+            resize,
+            aspect_mode,
+        } => transcode(
+            &input,
+            &output,
+            bitrate.as_deref(),
+            &preset,
+            max_fps,
+            resize.as_deref(),
+            &aspect_mode,
+        ),
     }
 }
 
@@ -752,12 +782,36 @@ fn parse_bitrate(s: &str) -> Result<u32> {
     }
 }
 
+/// Parses a "WxH" resize string into (width, height).
+fn parse_resize(s: &str) -> Result<(u32, u32)> {
+    let parts: Vec<&str> = s.split('x').collect();
+    if parts.len() != 2 {
+        return Err(miette::miette!(
+            "invalid resize format: '{s}' — use WxH (e.g., '1280x720')"
+        ));
+    }
+    let w: u32 = parts[0]
+        .parse()
+        .into_diagnostic()
+        .wrap_err_with(|| format!("invalid width in resize: '{s}'"))?;
+    let h: u32 = parts[1]
+        .parse()
+        .into_diagnostic()
+        .wrap_err_with(|| format!("invalid height in resize: '{s}'"))?;
+    if w == 0 || h == 0 {
+        return Err(miette::miette!("resize dimensions must be non-zero: '{s}'"));
+    }
+    Ok((w, h))
+}
+
 fn transcode(
     input: &PathBuf,
     output: &PathBuf,
     bitrate: Option<&str>,
     preset: &EncodePreset,
     max_fps: Option<f32>,
+    resize: Option<&str>,
+    aspect_mode_arg: &AspectModeArg,
 ) -> Result<()> {
     validate_output_format(output)?;
     let bitrate_bps = match bitrate {
@@ -836,6 +890,18 @@ fn transcode(
 
         builder = builder.with_decoder(*track_idx, decoder);
         builder = builder.with_encoder(*track_idx, encoder);
+
+        // Add scale filter if --resize was specified
+        if let Some(resize_str) = resize {
+            let (w, h) = parse_resize(resize_str)?;
+            let aspect_mode = match aspect_mode_arg {
+                AspectModeArg::Stretch => AspectMode::Stretch,
+                AspectModeArg::Fit => AspectMode::Fit,
+                AspectModeArg::Fill => AspectMode::Fill,
+            };
+            let scale_filter = ScaleFilter::new(w, h).with_aspect_mode(aspect_mode);
+            builder = builder.with_filter(*track_idx, scale_filter);
+        }
     }
 
     let mut pipeline = builder
@@ -848,12 +914,21 @@ fn transcode(
         EncodePreset::Medium => "medium",
         EncodePreset::Slow => "slow",
     };
-    eprintln!(
-        "Transcoding {} → {} (H.264, {} kbps, preset: {preset_name})",
-        input.display(),
-        output.display(),
-        bitrate_bps / 1000
-    );
+    if let Some(resize_str) = resize {
+        eprintln!(
+            "Transcoding {} → {} (H.264, {} kbps, preset: {preset_name}, resize: {resize_str})",
+            input.display(),
+            output.display(),
+            bitrate_bps / 1000
+        );
+    } else {
+        eprintln!(
+            "Transcoding {} → {} (H.264, {} kbps, preset: {preset_name})",
+            input.display(),
+            output.display(),
+            bitrate_bps / 1000
+        );
+    }
 
     pipeline
         .run()

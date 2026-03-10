@@ -15,6 +15,7 @@ path = "src/main.rs"
 splica-core.workspace = true
 splica-codec = { workspace = true, features = ["codec-h264"] }
 splica-mp4.workspace = true
+splica-filter.workspace = true
 splica-pipeline.workspace = true
 splica-webm.workspace = true
 clap = { version = "4", features = ["derive"] }

@@ -43,7 +43,7 @@ impl ScaleFilter {
             target_width,
             target_height,
             interpolation: Interpolation::Bilinear,
-            aspect_mode: AspectMode::Stretch,
+            aspect_mode: AspectMode::Fit,
         }
     }
 

@@ -493,6 +493,7 @@ dependencies = [
  "serde_json",
  "splica-codec",
  "splica-core",
+ "splica-filter",
  "splica-mp4",
  "splica-pipeline",
  "splica-webm",
@@ -522,6 +523,7 @@ dependencies = [
 name = "splica-filter"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "splica-core",
 ]
 
