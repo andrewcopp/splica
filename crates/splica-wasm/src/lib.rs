@@ -5,20 +5,21 @@
 //! # Usage (JavaScript)
 //!
 //! ```js
-//! import init, { WasmMp4Demuxer, WasmWebmDemuxer } from './pkg/splica_wasm.js';
+//! import init, { WasmMp4Demuxer } from './pkg/splica_wasm.js';
 //!
 //! await init();
 //!
-//! // MP4
+//! // Open MP4 and get WebCodecs-compatible config
 //! const mp4Data = new Uint8Array(await (await fetch('video.mp4')).arrayBuffer());
-//! const mp4 = WasmMp4Demuxer.fromBytes(mp4Data);
-//! console.log('Tracks:', mp4.trackCount());
-//! console.log('Video:', mp4.videoTrackInfo());
+//! const demuxer = WasmMp4Demuxer.fromBytes(mp4Data);
+//! const config = demuxer.videoDecoderConfig();
 //!
-//! // WebM
-//! const webmData = new Uint8Array(await (await fetch('video.webm')).arrayBuffer());
-//! const webm = WasmWebmDemuxer.fromBytes(webmData);
-//! console.log('Tracks:', webm.trackCount());
+//! // Feed packets to WebCodecs VideoDecoder
+//! while (true) {
+//!     const packet = demuxer.readVideoPacket();
+//!     if (!packet) break;
+//!     // packet.data, packet.timestampUs, packet.isKeyframe
+//! }
 //! ```
 //!
 //! # Build
@@ -27,5 +28,5 @@
 //! wasm-pack build --target web crates/splica-wasm
 //! ```
 
-pub use splica_mp4::wasm::WasmMp4Demuxer;
+pub use splica_mp4::wasm::{WasmMp4Demuxer, WasmVideoDecoderConfig, WasmVideoPacket};
 pub use splica_webm::wasm::WasmWebmDemuxer;

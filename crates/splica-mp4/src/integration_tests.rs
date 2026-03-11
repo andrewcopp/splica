@@ -593,6 +593,60 @@ fn find_child_box(body: &[u8], target: &[u8; 4]) -> bool {
     false
 }
 
+#[test]
+fn test_that_video_packets_have_monotonic_timestamps_and_first_is_keyframe() {
+    // GIVEN — a synthetic MP4 with 5 video samples
+    let mp4 = test_helpers::build_test_mp4(&[TestTrack::video(640, 480, 5)]);
+
+    // WHEN — read all video packets
+    let mut demuxer = Mp4Demuxer::open(Cursor::new(mp4)).unwrap();
+    let mut packets = Vec::new();
+    while let Some(pkt) = demuxer.read_packet().unwrap() {
+        if pkt.track_index == demuxer.tracks()[0].index {
+            packets.push(pkt);
+        }
+    }
+
+    // THEN — first packet is a keyframe, timestamps are monotonically non-decreasing
+    assert!(!packets.is_empty());
+    assert!(packets[0].is_keyframe, "first packet should be a keyframe");
+
+    for window in packets.windows(2) {
+        let prev_us = window[0].pts.as_seconds_f64() * 1_000_000.0;
+        let curr_us = window[1].pts.as_seconds_f64() * 1_000_000.0;
+        assert!(
+            curr_us >= prev_us,
+            "timestamps should be monotonic: {prev_us} -> {curr_us}"
+        );
+    }
+}
+
+#[test]
+fn test_that_codec_config_returns_avcc_for_h264_track() {
+    // GIVEN — a synthetic MP4 with H.264 video
+    let mp4 = test_helpers::build_test_mp4(&[TestTrack::video(1920, 1080, 3)]);
+
+    // WHEN
+    let demuxer = Mp4Demuxer::open(Cursor::new(mp4)).unwrap();
+    let video_track = &demuxer.tracks()[0];
+    let config = demuxer.codec_config(video_track.index);
+
+    // THEN — should be Avc1 with non-empty avcC
+    match config {
+        Some(crate::boxes::stsd::CodecConfig::Avc1 {
+            avcc,
+            width,
+            height,
+            ..
+        }) => {
+            assert!(!avcc.is_empty(), "avcC data should not be empty");
+            assert_eq!(*width, 1920);
+            assert_eq!(*height, 1080);
+        }
+        other => panic!("expected Avc1 config, got {other:?}"),
+    }
+}
+
 /// Sum all mdat body bytes in the file.
 fn sum_mdat_body_bytes(data: &[u8]) -> usize {
     let mut total = 0;
