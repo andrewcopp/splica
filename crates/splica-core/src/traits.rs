@@ -28,6 +28,16 @@ pub trait Demuxer {
     fn read_packet(&mut self) -> Result<Option<Packet>, DemuxError>;
 }
 
+impl Demuxer for Box<dyn Demuxer> {
+    fn tracks(&self) -> &[TrackInfo] {
+        (**self).tracks()
+    }
+
+    fn read_packet(&mut self) -> Result<Option<Packet>, DemuxError> {
+        (**self).read_packet()
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Seekable
 // ---------------------------------------------------------------------------
@@ -218,6 +228,20 @@ pub trait Muxer {
 
     /// Finalizes the container (writes headers, indices, etc.) and flushes all data.
     fn finalize(&mut self) -> Result<(), MuxError>;
+}
+
+impl Muxer for Box<dyn Muxer> {
+    fn add_track(&mut self, info: &TrackInfo) -> Result<TrackIndex, MuxError> {
+        (**self).add_track(info)
+    }
+
+    fn write_packet(&mut self, packet: &Packet) -> Result<(), MuxError> {
+        (**self).write_packet(packet)
+    }
+
+    fn finalize(&mut self) -> Result<(), MuxError> {
+        (**self).finalize()
+    }
 }
 
 // ---------------------------------------------------------------------------

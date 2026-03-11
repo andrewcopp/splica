@@ -379,15 +379,17 @@ fn open_demuxer(path: &PathBuf) -> Result<Box<dyn Demuxer>> {
     }
 }
 
-/// Opens an MP4 demuxer specifically (for commands needing codec config access).
-fn open_mp4_demuxer(path: &PathBuf) -> Result<Mp4Demuxer<File>> {
-    let file = File::open(path)
+/// Creates an output muxer based on file extension.
+fn create_muxer(output: &PathBuf) -> Result<Box<dyn Muxer>> {
+    let out_file = File::create(output)
         .into_diagnostic()
-        .wrap_err_with(|| format!("could not open file '{}'", path.display()))?;
+        .wrap_err_with(|| format!("could not create output file '{}'", output.display()))?;
 
-    Mp4Demuxer::open(file)
-        .into_diagnostic()
-        .wrap_err("failed to parse MP4 container")
+    if is_webm_output(output) {
+        Ok(Box::new(WebmMuxer::new(BufWriter::new(out_file))))
+    } else {
+        Ok(Box::new(Mp4Muxer::new(BufWriter::new(out_file))))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -582,38 +584,17 @@ fn trim(input: &PathBuf, output: &PathBuf, start: Option<&str>, end: Option<&str
     let start_secs = start.map(parse_time).transpose()?;
     let end_secs = end.map(parse_time).transpose()?;
 
-    let mut demuxer = open_mp4_demuxer(input).wrap_err("trim currently requires MP4 input")?;
+    let mut demuxer = open_demuxer(input)?;
+    let mut muxer = create_muxer(output)?;
 
-    let out_file = File::create(output)
-        .into_diagnostic()
-        .wrap_err_with(|| format!("could not create output file '{}'", output.display()))?;
-
-    let mut muxer = Mp4Muxer::new(BufWriter::new(out_file));
-
-    // Set up tracks with codec config passthrough
     let track_count = demuxer.tracks().len();
     for i in 0..track_count {
-        let track_idx = TrackIndex(i as u32);
         let info = demuxer.tracks()[i].clone();
-        if let (Some(config), Some(timescale)) = (
-            demuxer.codec_config(track_idx).cloned(),
-            demuxer.track_timescale(track_idx),
-        ) {
-            muxer
-                .add_track_with_config(&info, config, timescale)
-                .into_diagnostic()
-                .wrap_err_with(|| format!("failed to add track {i}"))?;
-        } else {
-            muxer
-                .add_track(&info)
-                .into_diagnostic()
-                .wrap_err_with(|| format!("failed to add track {i}"))?;
-        }
+        muxer
+            .add_track(&info)
+            .into_diagnostic()
+            .wrap_err_with(|| format!("failed to add track {i}"))?;
     }
-
-    // Copy metadata
-    let metadata = demuxer.metadata().to_vec();
-    muxer.set_metadata(metadata);
 
     let mut packet_count: u64 = 0;
     let mut skipped: u64 = 0;
@@ -654,7 +635,7 @@ fn trim(input: &PathBuf, output: &PathBuf, start: Option<&str>, end: Option<&str
                         actual_start_secs = Some(kf_packet.pts.as_seconds_f64());
                     }
                     muxer
-                        .write_packet_data(&kf_packet)
+                        .write_packet(&kf_packet)
                         .into_diagnostic()
                         .wrap_err("failed to write keyframe packet")?;
                     packet_count += 1;
@@ -670,16 +651,16 @@ fn trim(input: &PathBuf, output: &PathBuf, start: Option<&str>, end: Option<&str
         }
 
         muxer
-            .write_packet_data(&packet)
+            .write_packet(&packet)
             .into_diagnostic()
             .wrap_err("failed to write packet")?;
         packet_count += 1;
     }
 
     muxer
-        .finalize_file()
+        .finalize()
         .into_diagnostic()
-        .wrap_err("failed to finalize output MP4")?;
+        .wrap_err("failed to finalize output")?;
 
     eprintln!(
         "Trimmed: wrote {packet_count} packets, skipped {skipped} to {}",
@@ -718,8 +699,7 @@ fn trim(input: &PathBuf, output: &PathBuf, start: Option<&str>, end: Option<&str
 
 fn extract_audio(input: &PathBuf, output: &PathBuf) -> Result<()> {
     validate_output_format(output)?;
-    let mut demuxer =
-        open_mp4_demuxer(input).wrap_err("extract-audio currently requires MP4 input")?;
+    let mut demuxer = open_demuxer(input)?;
 
     // Find audio tracks
     let audio_tracks: Vec<(usize, splica_core::TrackInfo)> = demuxer
@@ -737,39 +717,19 @@ fn extract_audio(input: &PathBuf, output: &PathBuf) -> Result<()> {
         ));
     }
 
-    let out_file = File::create(output)
-        .into_diagnostic()
-        .wrap_err_with(|| format!("could not create output file '{}'", output.display()))?;
-
-    let mut muxer = Mp4Muxer::new(BufWriter::new(out_file));
+    let mut muxer = create_muxer(output)?;
 
     // Map input track indices to output track indices
     let mut input_to_output: std::collections::HashMap<u32, TrackIndex> =
         std::collections::HashMap::new();
 
     for (input_idx, info) in &audio_tracks {
-        let track_idx = TrackIndex(*input_idx as u32);
-        if let (Some(config), Some(timescale)) = (
-            demuxer.codec_config(track_idx).cloned(),
-            demuxer.track_timescale(track_idx),
-        ) {
-            let output_idx = muxer
-                .add_track_with_config(info, config, timescale)
-                .into_diagnostic()
-                .wrap_err_with(|| format!("failed to add audio track {input_idx}"))?;
-            input_to_output.insert(*input_idx as u32, output_idx);
-        } else {
-            let output_idx = muxer
-                .add_track(info)
-                .into_diagnostic()
-                .wrap_err_with(|| format!("failed to add audio track {input_idx}"))?;
-            input_to_output.insert(*input_idx as u32, output_idx);
-        }
+        let output_idx = muxer
+            .add_track(info)
+            .into_diagnostic()
+            .wrap_err_with(|| format!("failed to add audio track {input_idx}"))?;
+        input_to_output.insert(*input_idx as u32, output_idx);
     }
-
-    // Copy metadata
-    let metadata = demuxer.metadata().to_vec();
-    muxer.set_metadata(metadata);
 
     let mut packet_count: u64 = 0;
 
@@ -781,7 +741,7 @@ fn extract_audio(input: &PathBuf, output: &PathBuf) -> Result<()> {
         if let Some(&output_idx) = input_to_output.get(&packet.track_index.0) {
             packet.track_index = output_idx;
             muxer
-                .write_packet_data(&packet)
+                .write_packet(&packet)
                 .into_diagnostic()
                 .wrap_err("failed to write packet")?;
             packet_count += 1;
@@ -790,9 +750,9 @@ fn extract_audio(input: &PathBuf, output: &PathBuf) -> Result<()> {
     }
 
     muxer
-        .finalize_file()
+        .finalize()
         .into_diagnostic()
-        .wrap_err("failed to finalize output MP4")?;
+        .wrap_err("failed to finalize output")?;
 
     eprintln!(
         "Extracted {packet_count} audio packets ({} audio tracks) to {}",
@@ -947,21 +907,43 @@ fn transcode_inner(
         EncodePreset::Slow => 60.0,
     });
 
-    let demuxer = open_mp4_demuxer(input).wrap_err("transcode currently requires MP4 input")?;
+    // Try MP4 first (for codec config access), fall back to generic demuxer
+    let mut file = File::open(input)
+        .into_diagnostic()
+        .wrap_err_with(|| format!("could not open file '{}'", input.display()))?;
+    let format = detect_format(&mut file)?;
 
-    // Read track info and codec configs before moving demuxer into pipeline
-    let tracks = demuxer.tracks().to_vec();
-    let mut video_track_configs: Vec<(TrackIndex, Vec<u8>)> = Vec::new();
-
-    for track in &tracks {
-        if track.kind == TrackKind::Video {
-            if let Codec::Video(VideoCodec::H264) = &track.codec {
-                if let Some(CodecConfig::Avc1 { avcc, .. }) = demuxer.codec_config(track.index) {
-                    video_track_configs.push((track.index, avcc.to_vec()));
+    let (demuxer, video_track_configs): (Box<dyn Demuxer>, Vec<(TrackIndex, Vec<u8>)>) =
+        match format {
+            ContainerFormat::Mp4 => {
+                let mp4 = Mp4Demuxer::open(file)
+                    .into_diagnostic()
+                    .wrap_err("failed to parse MP4 container")?;
+                let tracks = mp4.tracks().to_vec();
+                let mut configs = Vec::new();
+                for track in &tracks {
+                    if track.kind == TrackKind::Video {
+                        if let Codec::Video(VideoCodec::H264) = &track.codec {
+                            if let Some(CodecConfig::Avc1 { avcc, .. }) =
+                                mp4.codec_config(track.index)
+                            {
+                                configs.push((track.index, avcc.to_vec()));
+                            }
+                        }
+                    }
                 }
+                (Box::new(mp4), configs)
             }
-        }
-    }
+            ContainerFormat::WebM => {
+                let webm = WebmDemuxer::open(BufReader::new(file))
+                    .into_diagnostic()
+                    .wrap_err("failed to parse WebM container")?;
+                // WebM doesn't expose MP4-style codec config; H.264 in WebM is unsupported
+                (Box::new(webm), Vec::new())
+            }
+        };
+
+    let tracks = demuxer.tracks().to_vec();
 
     // Collect audio track metadata for JSON output
     let audio_tracks: Vec<TranscodeAudioInfo> = tracks
@@ -990,11 +972,7 @@ fn transcode_inner(
         ));
     }
 
-    let out_file = File::create(output)
-        .into_diagnostic()
-        .wrap_err_with(|| format!("could not create output file '{}'", output.display()))?;
-
-    let muxer = Mp4Muxer::new(BufWriter::new(out_file));
+    let muxer = create_muxer(output)?;
 
     // Shared counters for JSON output
     use std::sync::atomic::{AtomicU64, Ordering};
