@@ -230,7 +230,14 @@ struct TranscodeAudioInfo {
     codec: String,
     sample_rate: u32,
     channels: Option<u32>,
-    mode: String, // "pass_through" or "re_encoded"
+    mode: AudioMode,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+enum AudioMode {
+    PassThrough,
+    ReEncoded,
 }
 
 #[derive(Serialize)]
@@ -779,7 +786,7 @@ fn stream_copy(args: &ProcessArgs<'_>, json_mode: bool) -> Result<TranscodeOutpu
                 codec,
                 sample_rate,
                 channels,
-                mode: "pass_through".to_string(),
+                mode: AudioMode::PassThrough,
             }
         })
         .collect();
@@ -1298,9 +1305,9 @@ fn process_inner(args: &ProcessArgs<'_>, json_mode: bool) -> Result<TranscodeOut
                 sample_rate: ac.sample_rate,
                 channels: ac.channel_layout.map(|cl| cl.channel_count()),
                 mode: if needs_transcode {
-                    "transcode".to_string()
+                    AudioMode::ReEncoded
                 } else {
-                    "pass_through".to_string()
+                    AudioMode::PassThrough
                 },
             }
         })
