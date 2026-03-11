@@ -1,6 +1,6 @@
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand, ValueEnum};
 use miette::{Context, IntoDiagnostic, Result};
@@ -240,13 +240,15 @@ fn main() -> Result<()> {
             aspect_mode,
             format,
         } => transcode(
-            &input,
-            &output,
-            bitrate.as_deref(),
-            &preset,
-            max_fps,
-            resize.as_deref(),
-            &aspect_mode,
+            &TranscodeArgs {
+                input: &input,
+                output: &output,
+                bitrate: bitrate.as_deref(),
+                preset: &preset,
+                max_fps,
+                resize: resize.as_deref(),
+                aspect_mode_arg: &aspect_mode,
+            },
             &format,
         ),
     }
@@ -258,7 +260,7 @@ fn main() -> Result<()> {
 
 /// Validates that the output file extension is a format splica can write.
 /// Fails fast before any input is read, with a helpful error message.
-fn validate_output_format(output: &PathBuf) -> Result<()> {
+fn validate_output_format(output: &Path) -> Result<()> {
     let ext = output
         .extension()
         .and_then(|e| e.to_str())
@@ -381,7 +383,7 @@ fn detect_format(file: &mut (impl Read + Seek)) -> Result<ContainerFormat> {
 }
 
 /// Returns true if the output path has a WebM extension.
-fn is_webm_output(path: &PathBuf) -> bool {
+fn is_webm_output(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
         .map(|e| e.to_lowercase() == "webm")
@@ -389,7 +391,7 @@ fn is_webm_output(path: &PathBuf) -> bool {
 }
 
 /// Opens a demuxer for the given file, auto-detecting the container format.
-fn open_demuxer(path: &PathBuf) -> Result<Box<dyn Demuxer>> {
+fn open_demuxer(path: &Path) -> Result<Box<dyn Demuxer>> {
     let mut file = File::open(path)
         .into_diagnostic()
         .wrap_err_with(|| format!("could not open file '{}'", path.display()))?;
@@ -413,7 +415,7 @@ fn open_demuxer(path: &PathBuf) -> Result<Box<dyn Demuxer>> {
 }
 
 /// Creates an output muxer based on file extension.
-fn create_muxer(output: &PathBuf) -> Result<Box<dyn Muxer>> {
+fn create_muxer(output: &Path) -> Result<Box<dyn Muxer>> {
     let out_file = File::create(output)
         .into_diagnostic()
         .wrap_err_with(|| format!("could not create output file '{}'", output.display()))?;
@@ -450,7 +452,7 @@ struct ProbeTrack {
     channel_layout: Option<String>,
 }
 
-fn probe(file: &PathBuf, format: &OutputFormat) -> Result<()> {
+fn probe(file: &Path, format: &OutputFormat) -> Result<()> {
     let demuxer = open_demuxer(file)?;
 
     let tracks: Vec<ProbeTrack> = demuxer
@@ -559,7 +561,7 @@ fn format_codec(codec: &splica_core::Codec) -> String {
 // convert
 // ---------------------------------------------------------------------------
 
-fn convert(input: &PathBuf, output: &PathBuf) -> Result<()> {
+fn convert(input: &Path, output: &Path) -> Result<()> {
     validate_output_format(output)?;
     let mut demuxer = open_demuxer(input)?;
 
@@ -612,7 +614,7 @@ fn convert(input: &PathBuf, output: &PathBuf) -> Result<()> {
 // trim
 // ---------------------------------------------------------------------------
 
-fn trim(input: &PathBuf, output: &PathBuf, start: Option<&str>, end: Option<&str>) -> Result<()> {
+fn trim(input: &Path, output: &Path, start: Option<&str>, end: Option<&str>) -> Result<()> {
     validate_output_format(output)?;
     let start_secs = start.map(parse_time).transpose()?;
     let end_secs = end.map(parse_time).transpose()?;
@@ -730,7 +732,7 @@ fn trim(input: &PathBuf, output: &PathBuf, start: Option<&str>, end: Option<&str
 // extract-audio
 // ---------------------------------------------------------------------------
 
-fn extract_audio(input: &PathBuf, output: &PathBuf) -> Result<()> {
+fn extract_audio(input: &Path, output: &Path) -> Result<()> {
     validate_output_format(output)?;
     let mut demuxer = open_demuxer(input)?;
 
@@ -856,37 +858,29 @@ fn parse_resize(s: &str) -> Result<(u32, u32)> {
     Ok((w, h))
 }
 
-fn transcode(
-    input: &PathBuf,
-    output: &PathBuf,
-    bitrate: Option<&str>,
-    preset: &EncodePreset,
+struct TranscodeArgs<'a> {
+    input: &'a Path,
+    output: &'a Path,
+    bitrate: Option<&'a str>,
+    preset: &'a EncodePreset,
     max_fps: Option<f32>,
-    resize: Option<&str>,
-    aspect_mode_arg: &AspectModeArg,
-    format: &OutputFormat,
-) -> Result<()> {
+    resize: Option<&'a str>,
+    aspect_mode_arg: &'a AspectModeArg,
+}
+
+fn transcode(args: &TranscodeArgs<'_>, format: &OutputFormat) -> Result<()> {
     let json_mode = matches!(format, OutputFormat::Json);
 
     // In JSON mode, catch errors and emit structured JSON instead of miette output
-    let result = transcode_inner(
-        input,
-        output,
-        bitrate,
-        preset,
-        max_fps,
-        resize,
-        aspect_mode_arg,
-        json_mode,
-    );
+    let result = transcode_inner(args, json_mode);
 
     if json_mode {
         match result {
             Ok((packets_read, frames_decoded, frames_encoded, packets_written, audio_tracks)) => {
                 let output_json = TranscodeResult {
                     status: "ok".to_string(),
-                    input: input.display().to_string(),
-                    output: output.display().to_string(),
+                    input: args.input.display().to_string(),
+                    output: args.output.display().to_string(),
                     packets_read,
                     frames_decoded,
                     frames_encoded,
@@ -915,67 +909,59 @@ fn transcode(
     }
 }
 
-fn transcode_inner(
-    input: &PathBuf,
-    output: &PathBuf,
-    bitrate: Option<&str>,
-    preset: &EncodePreset,
-    max_fps: Option<f32>,
-    resize: Option<&str>,
-    aspect_mode_arg: &AspectModeArg,
-    json_mode: bool,
-) -> Result<(u64, u64, u64, u64, Vec<TranscodeAudioInfo>)> {
-    validate_output_format(output)?;
-    let bitrate_bps = match bitrate {
+type TranscodeOutput = (u64, u64, u64, u64, Vec<TranscodeAudioInfo>);
+type DemuxerWithConfigs = (Box<dyn Demuxer>, Vec<(TrackIndex, Vec<u8>)>);
+
+fn transcode_inner(args: &TranscodeArgs<'_>, json_mode: bool) -> Result<TranscodeOutput> {
+    validate_output_format(args.output)?;
+    let bitrate_bps = match args.bitrate {
         Some(s) => parse_bitrate(s)?,
-        None => match preset {
+        None => match args.preset {
             EncodePreset::Fast => 500_000,     // 500 kbps
             EncodePreset::Medium => 1_000_000, // 1 Mbps
             EncodePreset::Slow => 2_000_000,   // 2 Mbps
         },
     };
 
-    let frame_rate_hint = max_fps.unwrap_or(match preset {
+    let frame_rate_hint = args.max_fps.unwrap_or(match args.preset {
         EncodePreset::Fast => 30.0,
         EncodePreset::Medium => 30.0,
         EncodePreset::Slow => 60.0,
     });
 
     // Try MP4 first (for codec config access), fall back to generic demuxer
-    let mut file = File::open(input)
+    let mut file = File::open(args.input)
         .into_diagnostic()
-        .wrap_err_with(|| format!("could not open file '{}'", input.display()))?;
+        .wrap_err_with(|| format!("could not open file '{}'", args.input.display()))?;
     let format = detect_format(&mut file)?;
 
-    let (demuxer, video_track_configs): (Box<dyn Demuxer>, Vec<(TrackIndex, Vec<u8>)>) =
-        match format {
-            ContainerFormat::Mp4 => {
-                let mp4 = Mp4Demuxer::open(file)
-                    .into_diagnostic()
-                    .wrap_err("failed to parse MP4 container")?;
-                let tracks = mp4.tracks().to_vec();
-                let mut configs = Vec::new();
-                for track in &tracks {
-                    if track.kind == TrackKind::Video {
-                        if let Codec::Video(VideoCodec::H264) = &track.codec {
-                            if let Some(CodecConfig::Avc1 { avcc, .. }) =
-                                mp4.codec_config(track.index)
-                            {
-                                configs.push((track.index, avcc.to_vec()));
-                            }
+    let (demuxer, video_track_configs): DemuxerWithConfigs = match format {
+        ContainerFormat::Mp4 => {
+            let mp4 = Mp4Demuxer::open(file)
+                .into_diagnostic()
+                .wrap_err("failed to parse MP4 container")?;
+            let tracks = mp4.tracks().to_vec();
+            let mut configs = Vec::new();
+            for track in &tracks {
+                if track.kind == TrackKind::Video {
+                    if let Codec::Video(VideoCodec::H264) = &track.codec {
+                        if let Some(CodecConfig::Avc1 { avcc, .. }) = mp4.codec_config(track.index)
+                        {
+                            configs.push((track.index, avcc.to_vec()));
                         }
                     }
                 }
-                (Box::new(mp4), configs)
             }
-            ContainerFormat::WebM => {
-                let webm = WebmDemuxer::open(BufReader::new(file))
-                    .into_diagnostic()
-                    .wrap_err("failed to parse WebM container")?;
-                // WebM doesn't expose MP4-style codec config; H.264 in WebM is unsupported
-                (Box::new(webm), Vec::new())
-            }
-        };
+            (Box::new(mp4), configs)
+        }
+        ContainerFormat::WebM => {
+            let webm = WebmDemuxer::open(BufReader::new(file))
+                .into_diagnostic()
+                .wrap_err("failed to parse WebM container")?;
+            // WebM doesn't expose MP4-style codec config; H.264 in WebM is unsupported
+            (Box::new(webm), Vec::new())
+        }
+    };
 
     let tracks = demuxer.tracks().to_vec();
 
@@ -1002,11 +988,11 @@ fn transcode_inner(
     if video_track_configs.is_empty() {
         return Err(miette::miette!(
             "no H.264 video tracks found in '{}' — transcode currently supports H.264 only",
-            input.display()
+            args.input.display()
         ));
     }
 
-    let muxer = create_muxer(output)?;
+    let muxer = create_muxer(args.output)?;
 
     // Shared counters for JSON output
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -1068,9 +1054,9 @@ fn transcode_inner(
         builder = builder.with_encoder(*track_idx, encoder);
 
         // Add scale filter if --resize was specified
-        if let Some(resize_str) = resize {
+        if let Some(resize_str) = args.resize {
             let (w, h) = parse_resize(resize_str)?;
-            let aspect_mode = match aspect_mode_arg {
+            let aspect_mode = match args.aspect_mode_arg {
                 AspectModeArg::Stretch => AspectMode::Stretch,
                 AspectModeArg::Fit => AspectMode::Fit,
                 AspectModeArg::Fill => AspectMode::Fill,
@@ -1085,23 +1071,23 @@ fn transcode_inner(
         .into_diagnostic()
         .wrap_err("failed to build transcode pipeline")?;
 
-    let preset_name = match preset {
+    let preset_name = match args.preset {
         EncodePreset::Fast => "fast",
         EncodePreset::Medium => "medium",
         EncodePreset::Slow => "slow",
     };
-    if let Some(resize_str) = resize {
+    if let Some(resize_str) = args.resize {
         eprintln!(
             "Transcoding {} → {} (H.264, {} kbps, preset: {preset_name}, resize: {resize_str})",
-            input.display(),
-            output.display(),
+            args.input.display(),
+            args.output.display(),
             bitrate_bps / 1000
         );
     } else {
         eprintln!(
             "Transcoding {} → {} (H.264, {} kbps, preset: {preset_name})",
-            input.display(),
-            output.display(),
+            args.input.display(),
+            args.output.display(),
             bitrate_bps / 1000
         );
     }
