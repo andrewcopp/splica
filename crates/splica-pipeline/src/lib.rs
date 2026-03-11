@@ -12,7 +12,7 @@ use std::collections::HashMap;
 pub use event::{PipelineEvent, PipelineEventKind};
 use splica_core::{
     AudioDecoder, AudioEncoder, AudioFilter, Decoder, Demuxer, Encoder, Frame, Muxer,
-    PipelineError, TrackIndex, VideoFilter,
+    PipelineError, TrackIndex, ValidationError, VideoFilter,
 };
 
 /// How the pipeline should handle a track.
@@ -215,65 +215,76 @@ impl<F: Fn(PipelineEvent)> PipelineBuilder<F> {
         self
     }
 
-    /// Builds and returns a configured [`Pipeline`] ready to run.
+    /// Runs all pre-flight validation checks and returns every error found.
     ///
-    /// Returns an error if the configuration is invalid (missing demuxer/muxer,
-    /// encoder without matching decoder, etc.).
-    pub fn build(mut self) -> Result<Pipeline<F>, PipelineError> {
-        let demuxer = self.demuxer.take().ok_or(PipelineError::Config {
-            message: "pipeline requires a demuxer".to_string(),
-        })?;
-        let muxer = self.muxer.take().ok_or(PipelineError::Config {
-            message: "pipeline requires a muxer".to_string(),
-        })?;
+    /// Call this to get a complete list of configuration issues before
+    /// committing to `build()`. The pipeline does not read any input data.
+    ///
+    /// `build()` calls `validate()` internally and fails on the first error,
+    /// so callers using `build()` get validation for free.
+    pub fn validate(&self) -> Vec<ValidationError> {
+        let mut errors = Vec::new();
 
-        // Validate: every video encoder must have a matching decoder
+        if self.demuxer.is_none() {
+            errors.push(ValidationError::MissingDemuxer);
+        }
+        if self.muxer.is_none() {
+            errors.push(ValidationError::MissingMuxer);
+        }
+
+        // Video encoder without decoder
         for track in self.encoders.keys() {
             if !self.decoders.contains_key(track) {
-                return Err(PipelineError::Config {
-                    message: format!(
-                        "track {} has an encoder but no decoder — both are required for transcoding",
-                        track.0
-                    ),
-                });
+                errors.push(ValidationError::EncoderWithoutDecoder(*track));
             }
         }
-
-        // Validate: every video decoder must have a matching encoder
+        // Video decoder without encoder
         for track in self.decoders.keys() {
             if !self.encoders.contains_key(track) {
-                return Err(PipelineError::Config {
-                    message: format!(
-                        "track {} has a decoder but no encoder — both are required for transcoding",
-                        track.0
-                    ),
-                });
+                errors.push(ValidationError::DecoderWithoutEncoder(*track));
             }
         }
-
-        // Validate: every audio encoder must have a matching decoder
+        // Audio encoder without decoder
         for track in self.audio_encoders.keys() {
             if !self.audio_decoders.contains_key(track) {
-                return Err(PipelineError::Config {
-                    message: format!(
-                        "track {} has an audio encoder but no audio decoder — both are required for transcoding",
-                        track.0
-                    ),
-                });
+                errors.push(ValidationError::AudioEncoderWithoutDecoder(*track));
+            }
+        }
+        // Audio decoder without encoder
+        for track in self.audio_decoders.keys() {
+            if !self.audio_encoders.contains_key(track) {
+                errors.push(ValidationError::AudioDecoderWithoutEncoder(*track));
+            }
+        }
+        // Orphan video filters (filter on a track without transcode chain)
+        for track in self.filters.keys() {
+            if !self.decoders.contains_key(track) || !self.encoders.contains_key(track) {
+                errors.push(ValidationError::OrphanVideoFilter(*track));
+            }
+        }
+        // Orphan audio filters
+        for track in self.audio_filters.keys() {
+            if !self.audio_decoders.contains_key(track) || !self.audio_encoders.contains_key(track)
+            {
+                errors.push(ValidationError::OrphanAudioFilter(*track));
             }
         }
 
-        // Validate: every audio decoder must have a matching encoder
-        for track in self.audio_decoders.keys() {
-            if !self.audio_encoders.contains_key(track) {
-                return Err(PipelineError::Config {
-                    message: format!(
-                        "track {} has an audio decoder but no audio encoder — both are required for transcoding",
-                        track.0
-                    ),
-                });
-            }
+        errors
+    }
+
+    /// Builds and returns a configured [`Pipeline`] ready to run.
+    ///
+    /// Calls [`validate()`](Self::validate) internally and returns the first
+    /// error as a `PipelineError::Validation` if validation fails.
+    pub fn build(mut self) -> Result<Pipeline<F>, PipelineError> {
+        let errors = self.validate();
+        if let Some(err) = errors.into_iter().next() {
+            return Err(PipelineError::Validation(err));
         }
+
+        let demuxer = self.demuxer.take().expect("validated: demuxer present");
+        let muxer = self.muxer.take().expect("validated: muxer present");
 
         // Build track modes
         let mut track_modes: HashMap<TrackIndex, TrackMode> = HashMap::new();
@@ -1506,5 +1517,103 @@ mod tests {
         assert_eq!(written.len(), 1000);
         let total_output_bytes: usize = written.iter().map(|p| p.data.len()).sum();
         assert_eq!(total_output_bytes, total_input_bytes);
+    }
+
+    // -----------------------------------------------------------------------
+    // Pre-flight validation (SPL-98)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_that_validate_returns_all_errors_at_once() {
+        // GIVEN — a builder with no demuxer, no muxer, and orphan encoder
+        let builder = PipelineBuilder::new().with_encoder(TrackIndex(0), MockEncoder::new());
+
+        // WHEN
+        let errors = builder.validate();
+
+        // THEN — should report multiple errors, not just the first
+        assert!(
+            errors.len() >= 2,
+            "expected at least 2 errors, got {}",
+            errors.len()
+        );
+    }
+
+    #[test]
+    fn test_that_validate_detects_orphan_video_filter() {
+        // GIVEN — a filter on a track with no decoder/encoder
+        let demuxer = MockDemuxer {
+            tracks: vec![make_track(0)],
+            packets: vec![],
+            position: 0,
+        };
+        let builder = PipelineBuilder::new()
+            .with_demuxer(demuxer)
+            .with_muxer(NullMuxer)
+            .with_filter(TrackIndex(0), MockFilter);
+
+        // WHEN
+        let errors = builder.validate();
+
+        // THEN
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e, ValidationError::OrphanVideoFilter(_))),
+            "expected OrphanVideoFilter, got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn test_that_validate_returns_empty_for_valid_config() {
+        // GIVEN — a properly configured pipeline
+        let demuxer = MockDemuxer {
+            tracks: vec![make_track(0)],
+            packets: vec![],
+            position: 0,
+        };
+        let builder = PipelineBuilder::new()
+            .with_demuxer(demuxer)
+            .with_muxer(NullMuxer);
+
+        // WHEN
+        let errors = builder.validate();
+
+        // THEN
+        assert!(errors.is_empty(), "expected no errors, got: {errors:?}");
+    }
+
+    #[test]
+    fn test_that_build_returns_validation_error_type() {
+        // GIVEN — encoder without decoder
+        let demuxer = MockDemuxer {
+            tracks: vec![make_track(0)],
+            packets: vec![],
+            position: 0,
+        };
+        let result = PipelineBuilder::new()
+            .with_demuxer(demuxer)
+            .with_muxer(NullMuxer)
+            .with_encoder(TrackIndex(0), MockEncoder::new())
+            .build();
+
+        // THEN — error should be Validation variant
+        assert!(matches!(
+            result,
+            Err(PipelineError::Validation(
+                ValidationError::EncoderWithoutDecoder(_)
+            ))
+        ));
+    }
+
+    /// Dummy video filter for orphan-filter tests.
+    struct MockFilter;
+    impl VideoFilter for MockFilter {
+        fn process(
+            &mut self,
+            frame: splica_core::media::VideoFrame,
+        ) -> Result<splica_core::media::VideoFrame, splica_core::FilterError> {
+            Ok(frame)
+        }
     }
 }

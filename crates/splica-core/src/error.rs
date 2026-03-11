@@ -5,6 +5,8 @@
 
 use std::fmt;
 
+use crate::media::TrackIndex;
+
 /// Broad categorization of errors for automated retry/abort decisions.
 ///
 /// Platform engineers (like Priya) match on this to decide whether to retry
@@ -480,6 +482,49 @@ impl serde::Serialize for FilterError {
 }
 
 // ---------------------------------------------------------------------------
+// ValidationError
+// ---------------------------------------------------------------------------
+
+/// Pre-flight validation errors detected before the pipeline runs.
+///
+/// These errors are configuration mistakes that can be caught statically from
+/// the builder state — no input data needs to be read. Calling
+/// `PipelineBuilder::validate()` returns all of them at once; `build()` returns
+/// the first one wrapped in a `PipelineError::Validation`.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ValidationError {
+    #[error("pipeline requires a demuxer")]
+    MissingDemuxer,
+
+    #[error("pipeline requires a muxer")]
+    MissingMuxer,
+
+    #[error("track {} has an encoder but no decoder — both are required for transcoding", .0.0)]
+    EncoderWithoutDecoder(TrackIndex),
+
+    #[error("track {} has a decoder but no encoder — both are required for transcoding", .0.0)]
+    DecoderWithoutEncoder(TrackIndex),
+
+    #[error("track {} has an audio encoder but no audio decoder — both are required for transcoding", .0.0)]
+    AudioEncoderWithoutDecoder(TrackIndex),
+
+    #[error("track {} has an audio decoder but no audio encoder — both are required for transcoding", .0.0)]
+    AudioDecoderWithoutEncoder(TrackIndex),
+
+    #[error("track {} has video filter(s) but no decoder/encoder — filters require transcoding", .0.0)]
+    OrphanVideoFilter(TrackIndex),
+
+    #[error("track {} has audio filter(s) but no audio decoder/encoder — filters require transcoding", .0.0)]
+    OrphanAudioFilter(TrackIndex),
+}
+
+impl ValidationError {
+    pub fn kind(&self) -> ErrorKind {
+        ErrorKind::InvalidInput
+    }
+}
+
+// ---------------------------------------------------------------------------
 // PipelineError
 // ---------------------------------------------------------------------------
 
@@ -506,6 +551,9 @@ pub enum PipelineError {
     #[error("pipeline configuration error: {message}")]
     Config { message: String },
 
+    #[error("pipeline validation failed: {0}")]
+    Validation(#[from] ValidationError),
+
     #[error("{0}")]
     Other(Box<dyn std::error::Error + Send + Sync>),
 }
@@ -519,6 +567,7 @@ impl PipelineError {
             Self::Encode(e) => e.kind(),
             Self::Mux(e) => e.kind(),
             Self::Config { .. } => ErrorKind::InvalidInput,
+            Self::Validation(e) => e.kind(),
             Self::Other(_) => ErrorKind::Internal,
         }
     }
@@ -564,6 +613,11 @@ impl serde::Serialize for PipelineError {
             Self::Config { .. } => {
                 let map =
                     serde_helpers::start_error_map(serializer, "Config", self.kind(), &msg, 0)?;
+                map.end()
+            }
+            Self::Validation(_) => {
+                let map =
+                    serde_helpers::start_error_map(serializer, "Validation", self.kind(), &msg, 0)?;
                 map.end()
             }
             Self::Other(_) => {

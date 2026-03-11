@@ -10,6 +10,7 @@ pub mod wasm_types;
 
 pub use error::{
     DecodeError, DemuxError, EncodeError, ErrorKind, FilterError, MuxError, PipelineError,
+    ValidationError,
 };
 pub use media::{
     AudioCodec, AudioFrame, AudioTrackInfo, ChannelLayout, Codec, ColorPrimaries, ColorRange,
