@@ -1,1 +1,13 @@
-//! MKV demuxer and muxer.
+//! MKV (Matroska) muxer.
+//!
+//! Writes compressed packets into a Matroska container. Uses the same EBML
+//! encoding as WebM but with the `"matroska"` document type, supporting a
+//! broader set of codecs (H.264, H.265, VP9, AV1, AAC, Opus, etc.).
+
+mod ebml;
+mod elements;
+pub mod error;
+mod muxer;
+
+pub use error::MkvError;
+pub use muxer::MkvMuxer;

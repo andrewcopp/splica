@@ -115,7 +115,7 @@ impl ContainerFormat {
     pub fn is_writable(self) -> bool {
         match self {
             Self::Mp4 | Self::WebM => true,
-            Self::Mkv => false,
+            Self::Mkv => true,
         }
     }
 }
@@ -663,10 +663,10 @@ mod tests {
     }
 
     #[test]
-    fn test_that_mp4_and_webm_are_writable_but_mkv_is_not() {
+    fn test_that_all_formats_are_writable() {
         assert!(ContainerFormat::Mp4.is_writable());
         assert!(ContainerFormat::WebM.is_writable());
-        assert!(!ContainerFormat::Mkv.is_writable());
+        assert!(ContainerFormat::Mkv.is_writable());
     }
 
     #[test]

@@ -9,3 +9,8 @@ description = "MKV demuxer and muxer for the splica media processing library"
 
 [dependencies]
 splica-core.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+bytes.workspace = true
+splica-webm.workspace = true

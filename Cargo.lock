@@ -949,6 +949,7 @@ dependencies = [
  "splica-codec",
  "splica-core",
  "splica-filter",
+ "splica-mkv",
  "splica-mp4",
  "splica-pipeline",
  "splica-webm",
@@ -993,7 +994,10 @@ dependencies = [
 name = "splica-mkv"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "splica-core",
+ "splica-webm",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

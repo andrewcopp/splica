@@ -15,6 +15,7 @@ use splica_core::{
     FilterError, MuxError, Muxer, PipelineError, TrackIndex, TrackKind, VideoCodec,
 };
 use splica_filter::{AspectMode, ScaleFilter, VolumeFilter};
+use splica_mkv::MkvMuxer;
 use splica_mp4::boxes::stsd::CodecConfig;
 use splica_mp4::{Mp4Demuxer, Mp4Muxer};
 use splica_pipeline::{PipelineBuilder, PipelineEventKind};
@@ -408,20 +409,15 @@ fn validate_output_format(output: &Path) -> Result<()> {
 
     match ContainerFormat::from_extension(ext) {
         Some(fmt) if fmt.is_writable() => Ok(()),
-        Some(ContainerFormat::Mkv) => Err(miette::miette!(
-            "output format 'mkv' is not yet supported for writing\n  \
-             → splica can currently write: mp4, webm\n  \
-             → MKV output is planned for a future release"
-        )),
-        Some(_) => Ok(()), // unreachable since all recognized formats are handled above
+        Some(_) => Ok(()), // unreachable since all recognized formats are writable
         None if ext.is_empty() => Err(miette::miette!(
             "output file has no extension — cannot determine output format\n  \
-             → Use a recognized extension: .mp4, .webm"
+             → Use a recognized extension: .mp4, .webm, .mkv"
         )),
         None => Err(miette::miette!(
             "unsupported output format '.{ext}'\n  \
-             → splica can currently write: mp4, webm\n  \
-             → Supported extensions: .mp4, .m4v, .m4a, .webm"
+             → splica can currently write: mp4, webm, mkv\n  \
+             → Supported extensions: .mp4, .m4v, .m4a, .webm, .mkv, .mka"
         )),
     }
 }
@@ -522,20 +518,25 @@ fn detect_format(file: &mut (impl Read + Seek)) -> Result<DetectedFormat> {
     ))
 }
 
-/// Returns true if the output path has a WebM extension.
 /// Returns true if the video codec can be stream-copied into the target container.
-fn is_video_codec_compatible(codec: &Codec, output_is_webm: bool) -> bool {
+fn is_video_codec_compatible(codec: &Codec, container: ContainerFormat) -> bool {
     match codec {
-        Codec::Video(vc) => {
-            if output_is_webm {
+        Codec::Video(vc) => match container {
+            ContainerFormat::WebM => {
                 // WebM supports VP8, VP9, AV1
                 matches!(vc, VideoCodec::Av1)
                     || matches!(vc, VideoCodec::Other(s) if s == "VP8" || s == "VP9")
-            } else {
+            }
+            ContainerFormat::Mp4 => {
                 // MP4 supports H.264, H.265, AV1
                 matches!(vc, VideoCodec::H264 | VideoCodec::H265 | VideoCodec::Av1)
             }
-        }
+            ContainerFormat::Mkv => {
+                // MKV supports all codecs splica handles
+                matches!(vc, VideoCodec::H264 | VideoCodec::H265 | VideoCodec::Av1)
+                    || matches!(vc, VideoCodec::Other(s) if s == "VP8" || s == "VP9")
+            }
+        },
         Codec::Audio(_) => true, // audio compatibility is handled separately
     }
 }
@@ -575,10 +576,10 @@ fn create_muxer(output: &Path) -> Result<Box<dyn Muxer>> {
         .into_diagnostic()
         .wrap_err_with(|| format!("could not create output file '{}'", output.display()))?;
 
-    if output_container(output) == Some(ContainerFormat::WebM) {
-        Ok(Box::new(WebmMuxer::new(BufWriter::new(out_file))))
-    } else {
-        Ok(Box::new(Mp4Muxer::new(BufWriter::new(out_file))))
+    match output_container(output) {
+        Some(ContainerFormat::WebM) => Ok(Box::new(WebmMuxer::new(BufWriter::new(out_file)))),
+        Some(ContainerFormat::Mkv) => Ok(Box::new(MkvMuxer::new(BufWriter::new(out_file)))),
+        _ => Ok(Box::new(Mp4Muxer::new(BufWriter::new(out_file)))),
     }
 }
 
@@ -769,11 +770,10 @@ fn stream_copy(args: &ProcessArgs<'_>, json_mode: bool) -> Result<TranscodeOutpu
         .into_diagnostic()
         .wrap_err_with(|| format!("could not create output file '{}'", args.output.display()))?;
 
-    let mut muxer: Box<dyn Muxer> = if output_container(args.output) == Some(ContainerFormat::WebM)
-    {
-        Box::new(WebmMuxer::new(BufWriter::new(out_file)))
-    } else {
-        Box::new(Mp4Muxer::new(BufWriter::new(out_file)))
+    let mut muxer: Box<dyn Muxer> = match output_container(args.output) {
+        Some(ContainerFormat::WebM) => Box::new(WebmMuxer::new(BufWriter::new(out_file))),
+        Some(ContainerFormat::Mkv) => Box::new(MkvMuxer::new(BufWriter::new(out_file))),
+        _ => Box::new(Mp4Muxer::new(BufWriter::new(out_file))),
     };
 
     let tracks = demuxer.tracks().to_vec();
@@ -1383,11 +1383,10 @@ fn process_inner(args: &ProcessArgs<'_>, json_mode: bool) -> Result<TranscodeOut
     };
 
     // Determine target audio codec based on output container
-    let output_is_webm = output_container(args.output) == Some(ContainerFormat::WebM);
-    let target_audio_codec = if output_is_webm {
-        splica_core::AudioCodec::Opus
-    } else {
-        splica_core::AudioCodec::Aac
+    let out_container = output_container(args.output).unwrap_or(ContainerFormat::Mp4);
+    let target_audio_codec = match out_container {
+        ContainerFormat::WebM | ContainerFormat::Mkv => splica_core::AudioCodec::Opus,
+        ContainerFormat::Mp4 => splica_core::AudioCodec::Aac,
     };
 
     // Determine which audio tracks need transcoding vs pass-through.
@@ -1426,7 +1425,7 @@ fn process_inner(args: &ProcessArgs<'_>, json_mode: bool) -> Result<TranscodeOut
         .tracks()
         .iter()
         .filter(|t| t.kind == TrackKind::Video)
-        .any(|t| !is_video_codec_compatible(&t.codec, output_is_webm));
+        .any(|t| !is_video_codec_compatible(&t.codec, out_container));
 
     let any_audio_needs_transcode = audio_needs_transcode.iter().any(|&b| b);
 
