@@ -599,9 +599,11 @@ name = "splica-core"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "js-sys",
  "serde",
  "serde_json",
  "thiserror",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -625,8 +627,6 @@ version = "0.1.0"
 dependencies = [
  "bytes",
  "js-sys",
- "serde",
- "serde_json",
  "splica-core",
  "thiserror",
  "wasm-bindgen",
@@ -644,6 +644,7 @@ dependencies = [
 name = "splica-wasm"
 version = "0.1.0"
 dependencies = [
+ "splica-core",
  "splica-mp4",
  "splica-webm",
  "wasm-bindgen",
@@ -655,8 +656,6 @@ version = "0.1.0"
 dependencies = [
  "bytes",
  "js-sys",
- "serde",
- "serde_json",
  "splica-core",
  "thiserror",
  "wasm-bindgen",

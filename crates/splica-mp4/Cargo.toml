@@ -11,7 +11,7 @@ description = "MP4 (ISO BMFF) demuxer and muxer for the splica media processing 
 crate-type = ["rlib", "cdylib"]
 
 [features]
-wasm = ["dep:wasm-bindgen", "dep:js-sys", "splica-core/serde"]
+wasm = ["dep:wasm-bindgen", "dep:js-sys", "splica-core/serde", "splica-core/wasm"]
 
 [dependencies]
 splica-core.workspace = true

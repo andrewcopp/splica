@@ -7,7 +7,9 @@ use std::io::Cursor;
 
 use wasm_bindgen::prelude::*;
 
-use splica_core::wasm_types::{audio_track_info_json, video_track_info_json};
+use splica_core::wasm_types::{
+    audio_track_info_json, video_track_info_json, WasmVideoDecoderConfig, WasmVideoPacket,
+};
 use splica_core::{Demuxer, TrackKind};
 
 use crate::boxes::stsd::CodecConfig;
@@ -123,12 +125,12 @@ impl WasmMp4Demuxer {
                 ..
             }) => {
                 let codec_string = build_avc_codec_string(avcc);
-                Ok(Some(WasmVideoDecoderConfig {
-                    codec: codec_string,
-                    coded_width: *width as u32,
-                    coded_height: *height as u32,
-                    description: avcc.to_vec(),
-                }))
+                Ok(Some(WasmVideoDecoderConfig::new(
+                    codec_string,
+                    *width as u32,
+                    *height as u32,
+                    avcc.to_vec(),
+                )))
             }
             _ => Ok(None),
         }
@@ -158,11 +160,11 @@ impl WasmMp4Demuxer {
                 Ok(Some(packet)) => {
                     if packet.track_index == video_index {
                         let timestamp_us = packet.pts.as_seconds_f64() * 1_000_000.0;
-                        return Ok(Some(WasmVideoPacket {
-                            data: packet.data.to_vec(),
+                        return Ok(Some(WasmVideoPacket::new(
+                            packet.data.to_vec(),
                             timestamp_us,
-                            is_keyframe: packet.is_keyframe,
-                        }));
+                            packet.is_keyframe,
+                        )));
                     }
                     // Skip non-video packets
                 }
@@ -170,71 +172,6 @@ impl WasmMp4Demuxer {
                 Err(e) => return Err(JsValue::from_str(&e.to_string())),
             }
         }
-    }
-}
-
-/// A compressed video packet with metadata for WebCodecs `EncodedVideoChunk`.
-#[wasm_bindgen]
-pub struct WasmVideoPacket {
-    data: Vec<u8>,
-    timestamp_us: f64,
-    is_keyframe: bool,
-}
-
-#[wasm_bindgen]
-impl WasmVideoPacket {
-    /// The compressed video data (AVCC format: length-prefixed NAL units).
-    #[wasm_bindgen(getter)]
-    pub fn data(&self) -> js_sys::Uint8Array {
-        js_sys::Uint8Array::from(self.data.as_slice())
-    }
-
-    /// Presentation timestamp in microseconds.
-    #[wasm_bindgen(getter, js_name = "timestampUs")]
-    pub fn timestamp_us(&self) -> f64 {
-        self.timestamp_us
-    }
-
-    /// Whether this packet is a keyframe (IDR for H.264).
-    #[wasm_bindgen(getter, js_name = "isKeyframe")]
-    pub fn is_keyframe(&self) -> bool {
-        self.is_keyframe
-    }
-}
-
-/// WebCodecs-compatible video decoder configuration.
-#[wasm_bindgen]
-pub struct WasmVideoDecoderConfig {
-    codec: String,
-    coded_width: u32,
-    coded_height: u32,
-    description: Vec<u8>,
-}
-
-#[wasm_bindgen]
-impl WasmVideoDecoderConfig {
-    /// WebCodecs codec string (e.g., `"avc1.42c01e"`).
-    #[wasm_bindgen(getter)]
-    pub fn codec(&self) -> String {
-        self.codec.clone()
-    }
-
-    /// Coded video width.
-    #[wasm_bindgen(getter, js_name = "codedWidth")]
-    pub fn coded_width(&self) -> u32 {
-        self.coded_width
-    }
-
-    /// Coded video height.
-    #[wasm_bindgen(getter, js_name = "codedHeight")]
-    pub fn coded_height(&self) -> u32 {
-        self.coded_height
-    }
-
-    /// Raw avcC box data for `VideoDecoderConfig.description`.
-    #[wasm_bindgen(getter)]
-    pub fn description(&self) -> js_sys::Uint8Array {
-        js_sys::Uint8Array::from(self.description.as_slice())
     }
 }
 

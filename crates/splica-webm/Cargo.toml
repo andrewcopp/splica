@@ -11,7 +11,7 @@ description = "WebM (Matroska subset) demuxer and muxer for the splica media pro
 crate-type = ["rlib", "cdylib"]
 
 [features]
-wasm = ["dep:wasm-bindgen", "dep:js-sys", "splica-core/serde"]
+wasm = ["dep:wasm-bindgen", "dep:js-sys", "splica-core/serde", "splica-core/wasm"]
 
 [dependencies]
 bytes.workspace = true

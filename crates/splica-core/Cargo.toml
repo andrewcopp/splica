@@ -9,9 +9,12 @@ description = "Shared types, traits, and error types for the splica media proces
 
 [features]
 serde = ["dep:serde", "dep:serde_json"]
+wasm = ["dep:wasm-bindgen", "dep:js-sys"]
 
 [dependencies]
 bytes.workspace = true
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 thiserror.workspace = true
+wasm-bindgen = { version = "0.2", optional = true }
+js-sys = { version = "0.3", optional = true }

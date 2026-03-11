@@ -87,3 +87,108 @@ pub fn audio_track_info_json(tracks: &[TrackInfo]) -> Result<Option<String>, ser
         None => Ok(None),
     }
 }
+
+// ---------------------------------------------------------------------------
+// WASM-bindgen types (shared between container crates)
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "wasm")]
+mod wasm_js_types {
+    use wasm_bindgen::prelude::*;
+
+    /// A compressed video packet with metadata for WebCodecs `EncodedVideoChunk`.
+    #[wasm_bindgen]
+    pub struct WasmVideoPacket {
+        data: Vec<u8>,
+        timestamp_us: f64,
+        is_keyframe: bool,
+    }
+
+    impl WasmVideoPacket {
+        /// Creates a new `WasmVideoPacket` from raw fields.
+        pub fn new(data: Vec<u8>, timestamp_us: f64, is_keyframe: bool) -> Self {
+            Self {
+                data,
+                timestamp_us,
+                is_keyframe,
+            }
+        }
+    }
+
+    #[wasm_bindgen]
+    impl WasmVideoPacket {
+        /// The compressed video data.
+        #[wasm_bindgen(getter)]
+        pub fn data(&self) -> js_sys::Uint8Array {
+            js_sys::Uint8Array::from(self.data.as_slice())
+        }
+
+        /// Presentation timestamp in microseconds.
+        #[wasm_bindgen(getter, js_name = "timestampUs")]
+        pub fn timestamp_us(&self) -> f64 {
+            self.timestamp_us
+        }
+
+        /// Whether this packet is a keyframe.
+        #[wasm_bindgen(getter, js_name = "isKeyframe")]
+        pub fn is_keyframe(&self) -> bool {
+            self.is_keyframe
+        }
+    }
+
+    /// WebCodecs-compatible video decoder configuration.
+    #[wasm_bindgen]
+    pub struct WasmVideoDecoderConfig {
+        codec: String,
+        coded_width: u32,
+        coded_height: u32,
+        description: Vec<u8>,
+    }
+
+    impl WasmVideoDecoderConfig {
+        /// Creates a new `WasmVideoDecoderConfig` from raw fields.
+        pub fn new(
+            codec: String,
+            coded_width: u32,
+            coded_height: u32,
+            description: Vec<u8>,
+        ) -> Self {
+            Self {
+                codec,
+                coded_width,
+                coded_height,
+                description,
+            }
+        }
+    }
+
+    #[wasm_bindgen]
+    impl WasmVideoDecoderConfig {
+        /// WebCodecs codec string (e.g., `"avc1.42c01e"`, `"vp09.00.10.08"`).
+        #[wasm_bindgen(getter)]
+        pub fn codec(&self) -> String {
+            self.codec.clone()
+        }
+
+        /// Coded video width.
+        #[wasm_bindgen(getter, js_name = "codedWidth")]
+        pub fn coded_width(&self) -> u32 {
+            self.coded_width
+        }
+
+        /// Coded video height.
+        #[wasm_bindgen(getter, js_name = "codedHeight")]
+        pub fn coded_height(&self) -> u32 {
+            self.coded_height
+        }
+
+        /// Raw codec-specific data for `VideoDecoderConfig.description`.
+        #[wasm_bindgen(getter)]
+        pub fn description(&self) -> js_sys::Uint8Array {
+            js_sys::Uint8Array::from(self.description.as_slice())
+        }
+    }
+}
+
+#[cfg(feature = "wasm")]
+pub use wasm_js_types::{WasmVideoDecoderConfig, WasmVideoPacket};
