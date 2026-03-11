@@ -542,6 +542,121 @@ fn test_that_extract_audio_json_has_type_discriminator() {
 }
 
 // ---------------------------------------------------------------------------
+// Per-track duration (SPL-119)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_that_probe_mp4_reports_track_durations() {
+    // GIVEN — an MP4 fixture with known duration
+
+    // WHEN — probe with --format json
+    let output = splica_binary()
+        .args([
+            "probe",
+            "--format",
+            "json",
+            &fixture_path("bigbuckbunny_h264.mp4"),
+        ])
+        .output()
+        .unwrap();
+
+    // THEN — every track has a non-null duration_seconds > 0
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let tracks = json["tracks"].as_array().unwrap();
+    assert!(!tracks.is_empty());
+    for track in tracks {
+        let dur = track["duration_seconds"].as_f64();
+        assert!(
+            dur.is_some(),
+            "track {} duration_seconds should not be null",
+            track["index"]
+        );
+        assert!(
+            dur.unwrap() > 0.0,
+            "track {} duration_seconds should be > 0, got {}",
+            track["index"],
+            dur.unwrap()
+        );
+    }
+}
+
+#[test]
+fn test_that_probe_webm_reports_track_durations() {
+    // GIVEN — a WebM fixture with known duration
+
+    // WHEN — probe with --format json
+    let output = splica_binary()
+        .args([
+            "probe",
+            "--format",
+            "json",
+            &fixture_path("bigbuckbunny_vp9.webm"),
+        ])
+        .output()
+        .unwrap();
+
+    // THEN — every track has a non-null duration_seconds > 0
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let tracks = json["tracks"].as_array().unwrap();
+    assert!(!tracks.is_empty());
+    for track in tracks {
+        let dur = track["duration_seconds"].as_f64();
+        assert!(
+            dur.is_some(),
+            "track {} duration_seconds should not be null",
+            track["index"]
+        );
+        assert!(
+            dur.unwrap() > 0.0,
+            "track {} duration_seconds should be > 0, got {}",
+            track["index"],
+            dur.unwrap()
+        );
+    }
+}
+
+#[test]
+fn test_that_probe_mkv_reports_track_durations() {
+    // GIVEN — an MKV fixture with known duration
+
+    // WHEN — probe with --format json
+    let output = splica_binary()
+        .args([
+            "probe",
+            "--format",
+            "json",
+            &fixture_path("bigbuckbunny_h264.mkv"),
+        ])
+        .output()
+        .unwrap();
+
+    // THEN — every track has a non-null duration_seconds > 0
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let tracks = json["tracks"].as_array().unwrap();
+    assert!(!tracks.is_empty());
+    for track in tracks {
+        let dur = track["duration_seconds"].as_f64();
+        assert!(
+            dur.is_some(),
+            "track {} duration_seconds should not be null",
+            track["index"]
+        );
+        assert!(
+            dur.unwrap() > 0.0,
+            "track {} duration_seconds should be > 0, got {}",
+            track["index"],
+            dur.unwrap()
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Probe JSON contract (SPL-116)
 // ---------------------------------------------------------------------------
 
