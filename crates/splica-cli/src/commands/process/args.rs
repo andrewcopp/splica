@@ -324,8 +324,32 @@ fn open_mkv_configs(file: File) -> Result<DemuxerWithConfigs> {
         .into_diagnostic()
         .wrap_err("failed to parse MKV container")?;
     let tracks = mkv.tracks().to_vec();
+    let mut video_configs = Vec::new();
     let mut audio_configs = Vec::new();
     for track in &tracks {
+        if track.kind == TrackKind::Video {
+            let codec_tag = match &track.codec {
+                Codec::Video(VideoCodec::H264) => Some(VideoTrackCodec::H264),
+                Codec::Video(VideoCodec::H265) => Some(VideoTrackCodec::H265),
+                Codec::Video(VideoCodec::Av1) => Some(VideoTrackCodec::Av1),
+                _ => None,
+            };
+            if let Some(vtc) = codec_tag {
+                let config_data = mkv
+                    .codec_private(track.index)
+                    .map(|d| d.to_vec())
+                    .unwrap_or_default();
+                let video = track.video.as_ref();
+                video_configs.push(VideoTrackConfig {
+                    track_index: track.index,
+                    codec: vtc,
+                    config_data,
+                    color_space: video.and_then(|v| v.color_space),
+                    width: video.map(|v| v.width).unwrap_or(0),
+                    height: video.map(|v| v.height).unwrap_or(0),
+                });
+            }
+        }
         if track.kind == TrackKind::Audio {
             if let Codec::Audio(ref audio_codec) = track.codec {
                 audio_configs.push(AudioCodecConfig {
@@ -338,8 +362,5 @@ fn open_mkv_configs(file: File) -> Result<DemuxerWithConfigs> {
             }
         }
     }
-    // MKV codec_private is available via MkvDemuxer::codec_private() but is
-    // not in MP4 format — video configs are left empty for now (decode will
-    // use in-band parameter sets).
-    Ok((Box::new(mkv), Vec::new(), audio_configs))
+    Ok((Box::new(mkv), video_configs, audio_configs))
 }
