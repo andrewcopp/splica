@@ -2,7 +2,7 @@
 
 use std::io::Cursor;
 
-use splica_core::{Demuxer, TrackKind};
+use splica_core::{Demuxer, SeekMode, Seekable, Timestamp, TrackKind};
 use splica_webm::WebmDemuxer;
 
 // ---------------------------------------------------------------------------
@@ -375,4 +375,114 @@ fn test_that_streaming_read_yields_all_packets() {
     }
 
     assert_eq!(count, 10);
+}
+
+/// Builds a WebM file with multiple clusters, each with its own timestamp.
+/// `clusters` is a list of (cluster_timestamp, frames) where each frame is
+/// (relative_ts, is_keyframe, data).
+fn build_multi_cluster_webm(clusters: &[(u64, Vec<(i16, bool, &[u8])>)]) -> Vec<u8> {
+    let ebml_body = [
+        uint_element(0x4286, 1),        // EBMLVersion
+        string_element(0x4282, "webm"), // DocType
+    ]
+    .concat();
+    let ebml_header = element(0x1A45DFA3, &ebml_body);
+
+    let video_settings = [
+        uint_element(0xB0, 1920), // PixelWidth
+        uint_element(0xBA, 1080), // PixelHeight
+    ]
+    .concat();
+
+    let track_entry = [
+        uint_element(0xD7, 1),          // TrackNumber
+        uint_element(0x83, 1),          // TrackType (video)
+        string_element(0x86, "V_VP9"),  // CodecID
+        element(0xE0, &video_settings), // Video
+    ]
+    .concat();
+
+    let tracks = element(0x1654AE6B, &element(0xAE, &track_entry));
+    let info = element(0x1549A966, &uint_element(0x2AD7B1, 1_000_000));
+
+    let mut segment_body = Vec::new();
+    segment_body.extend_from_slice(&info);
+    segment_body.extend_from_slice(&tracks);
+
+    for (cluster_ts, frames) in clusters {
+        let mut cluster_body = uint_element(0xE7, *cluster_ts);
+        for (ts, kf, data) in frames {
+            cluster_body.extend_from_slice(&simple_block(1, *ts, *kf, data));
+        }
+        segment_body.extend_from_slice(&element(0x1F43B675, &cluster_body));
+    }
+
+    let segment = element(0x18538067, &segment_body);
+    [ebml_header, segment].concat()
+}
+
+#[test]
+fn test_that_seek_to_keyframe_resets_to_nearest_keyframe() {
+    // GIVEN — 3 clusters: keyframe at t=0, delta at t=1000, keyframe at t=2000
+    let data = build_multi_cluster_webm(&[
+        (0, vec![(0, true, &[0xAA])]),
+        (1000, vec![(0, false, &[0xBB])]),
+        (2000, vec![(0, true, &[0xCC])]),
+    ]);
+    let cursor = Cursor::new(data);
+    let mut demuxer = WebmDemuxer::open(cursor).unwrap();
+
+    // Consume all packets
+    while demuxer.read_packet().unwrap().is_some() {}
+
+    // WHEN — seek to t=1.5s (1500ms = 1_500_000_000 ns) in keyframe mode
+    let target = Timestamp::new(1_500_000_000, 1_000_000_000).unwrap();
+    demuxer.seek(target, SeekMode::Keyframe).unwrap();
+
+    // THEN — next packet should be the keyframe at t=0 (last keyframe before target)
+    let pkt = demuxer.read_packet().unwrap().unwrap();
+    assert!(pkt.is_keyframe);
+    assert_eq!(&pkt.data[..], &[0xAA]);
+}
+
+#[test]
+fn test_that_seek_precise_finds_nearest_packet() {
+    // GIVEN — 3 clusters with packets at t=0, t=1000ms, t=2000ms
+    let data = build_multi_cluster_webm(&[
+        (0, vec![(0, true, &[0xAA])]),
+        (1000, vec![(0, false, &[0xBB])]),
+        (2000, vec![(0, true, &[0xCC])]),
+    ]);
+    let cursor = Cursor::new(data);
+    let mut demuxer = WebmDemuxer::open(cursor).unwrap();
+
+    // WHEN — seek to t=1.5s in precise mode
+    let target = Timestamp::new(1_500_000_000, 1_000_000_000).unwrap();
+    demuxer.seek(target, SeekMode::Precise).unwrap();
+
+    // THEN — next packet should be the one at t=1000ms (last packet at or before target)
+    let pkt = demuxer.read_packet().unwrap().unwrap();
+    assert_eq!(&pkt.data[..], &[0xBB]);
+}
+
+#[test]
+fn test_that_seek_position_returns_timestamp_after_seek() {
+    // GIVEN — multi-cluster WebM
+    let data = build_multi_cluster_webm(&[
+        (0, vec![(0, true, &[0xAA])]),
+        (2000, vec![(0, true, &[0xBB])]),
+    ]);
+    let cursor = Cursor::new(data);
+    let mut demuxer = WebmDemuxer::open(cursor).unwrap();
+
+    // Consume all
+    while demuxer.read_packet().unwrap().is_some() {}
+
+    // WHEN — seek to t=0
+    let target = Timestamp::new(0, 1_000_000_000).unwrap();
+    demuxer.seek(target, SeekMode::Keyframe).unwrap();
+
+    // THEN — seek_position returns the timestamp of the next packet
+    let pos = demuxer.seek_position().unwrap();
+    assert_eq!(pos.as_seconds_f64(), 0.0);
 }

@@ -7,8 +7,8 @@ use std::io::{Read, Seek, SeekFrom};
 
 use bytes::Bytes;
 use splica_core::{
-    AudioCodec, AudioTrackInfo, ChannelLayout, Codec, DemuxError, Demuxer, Packet, Timestamp,
-    TrackIndex, TrackInfo, TrackKind, VideoCodec, VideoTrackInfo,
+    AudioCodec, AudioTrackInfo, ChannelLayout, Codec, DemuxError, Demuxer, Packet, SeekMode,
+    Seekable, Timestamp, TrackIndex, TrackInfo, TrackKind, VideoCodec, VideoTrackInfo,
 };
 
 use crate::ebml;
@@ -297,6 +297,20 @@ impl<R: Read + Seek> WebmDemuxer<R> {
             .get(track.0 as usize)
             .and_then(|t| t.codec_private.as_deref())
     }
+
+    /// Returns the presentation timestamp of the current read position.
+    ///
+    /// After a seek, this returns the timestamp of the packet that will be
+    /// yielded by the next `read_packet()` call. Returns `None` if the
+    /// demuxer is at end-of-stream or the buffer is empty.
+    pub fn seek_position(&self) -> Option<Timestamp> {
+        if self.buffer_pos < self.packet_buffer.len() {
+            let pkt = &self.packet_buffer[self.buffer_pos];
+            Timestamp::new(pkt.pts_ns, 1_000_000_000)
+        } else {
+            None
+        }
+    }
 }
 
 impl<R: Read + Seek> Demuxer for WebmDemuxer<R> {
@@ -346,6 +360,69 @@ impl<R: Read + Seek> Demuxer for WebmDemuxer<R> {
                 Err(e) => return Err(e.into()),
             }
         }
+    }
+}
+
+impl<R: Read + Seek> Seekable for WebmDemuxer<R> {
+    fn seek(&mut self, target: Timestamp, mode: SeekMode) -> Result<(), DemuxError> {
+        let target_ns = (target.as_seconds_f64() * 1_000_000_000.0) as i64;
+
+        // Reset to beginning of clusters
+        self.position = self.cluster_start;
+        self.eof = false;
+        self.packet_buffer.clear();
+        self.buffer_pos = 0;
+
+        // Track the best match: (cluster file offset, index within cluster buffer)
+        let mut best: Option<(u64, usize)> = None;
+
+        loop {
+            let cluster_pos = self.position;
+
+            if !self
+                .read_next_cluster()
+                .map_err(|e| -> DemuxError { e.into() })?
+            {
+                break;
+            }
+
+            let mut found_past_target = false;
+
+            for (i, pkt) in self.packet_buffer.iter().enumerate() {
+                let is_candidate = match mode {
+                    SeekMode::Keyframe => pkt.is_keyframe && pkt.pts_ns <= target_ns,
+                    SeekMode::Precise => pkt.pts_ns <= target_ns,
+                };
+                if is_candidate {
+                    best = Some((cluster_pos, i));
+                }
+                if pkt.pts_ns > target_ns {
+                    found_past_target = true;
+                }
+            }
+
+            if found_past_target {
+                break;
+            }
+        }
+
+        // Re-read the cluster containing the best match and position within it
+        if let Some((cluster_pos, buffer_idx)) = best {
+            self.position = cluster_pos;
+            self.eof = false;
+            let _ = self
+                .read_next_cluster()
+                .map_err(|e| -> DemuxError { e.into() })?;
+            self.buffer_pos = buffer_idx;
+        } else {
+            // No suitable packet found — reset to start of clusters
+            self.position = self.cluster_start;
+            self.eof = false;
+            self.packet_buffer.clear();
+            self.buffer_pos = 0;
+        }
+
+        Ok(())
     }
 }
 

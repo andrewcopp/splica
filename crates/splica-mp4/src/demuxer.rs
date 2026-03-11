@@ -67,6 +67,22 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
         self.mp4_tracks.get(track.0 as usize).map(|t| t.timescale)
     }
 
+    /// Returns the presentation timestamp of the current read position.
+    ///
+    /// After a seek, this returns the timestamp of the packet that will be
+    /// yielded by the next `read_packet()` call. Returns `None` if the
+    /// demuxer is at end-of-stream.
+    pub fn seek_position(&self) -> Option<Timestamp> {
+        if self.position >= self.read_order.len() {
+            return None;
+        }
+        let (track_idx, sample_idx) = self.read_order[self.position];
+        let track = &self.mp4_tracks[track_idx];
+        let sample = &track.sample_table.entries[sample_idx];
+        let pts_ticks = sample.dts + sample.cts_offset as i64;
+        Timestamp::new(pts_ticks, track.sample_table.timescale)
+    }
+
     /// Opens an MP4 file with a resource budget.
     ///
     /// The budget limits how many bytes can be buffered (moov box + sample
