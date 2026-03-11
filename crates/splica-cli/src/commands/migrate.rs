@@ -296,7 +296,7 @@ fn build_splica_command(parsed: &FfmpegParsed) -> Result<(String, Vec<String>)> 
         .as_deref()
         .ok_or_else(|| miette::miette!("no output file found in the ffmpeg command"))?;
 
-    let explanation: Vec<String> = parsed
+    let mut explanation: Vec<String> = parsed
         .mappings
         .iter()
         .map(|m| format!("{}  →  {}", m.from, m.to))
@@ -316,6 +316,10 @@ fn build_splica_command(parsed: &FfmpegParsed) -> Result<(String, Vec<String>)> 
         if let Some(end) = &parsed.end {
             cmd.push_str(&format!(" --end {end}"));
         }
+
+        let mut warnings = collect_trim_warnings(parsed);
+        explanation.append(&mut warnings);
+
         return Ok((cmd, explanation));
     }
 
@@ -342,6 +346,44 @@ fn build_splica_command(parsed: &FfmpegParsed) -> Result<(String, Vec<String>)> 
     }
 
     Ok((cmd, explanation))
+}
+
+fn collect_trim_warnings(parsed: &FfmpegParsed) -> Vec<String> {
+    let mut warnings = Vec::new();
+
+    if let Some(resize) = &parsed.resize {
+        warnings.push(format!(
+            "Warning: `splica trim` doesn't support -vf scale={} — run `splica process` separately to resize",
+            resize.replace('x', ":")
+        ));
+    }
+    if let Some(crop) = &parsed.crop {
+        warnings.push(format!(
+            "Warning: `splica trim` doesn't support -vf crop={crop} — run `splica process` separately to crop"
+        ));
+    }
+    if let Some(bitrate) = &parsed.bitrate {
+        warnings.push(format!(
+            "Warning: `splica trim` doesn't support -b:v {bitrate} — run `splica process` separately to set bitrate"
+        ));
+    }
+    if let Some(crf) = &parsed.crf {
+        warnings.push(format!(
+            "Warning: `splica trim` doesn't support -crf {crf} — run `splica process` separately to set CRF"
+        ));
+    }
+    if let Some(volume) = &parsed.volume {
+        warnings.push(format!(
+            "Warning: `splica trim` doesn't support -af volume={volume} — run `splica process` separately to adjust volume"
+        ));
+    }
+    if let Some(codec) = &parsed.codec {
+        warnings.push(format!(
+            "Warning: `splica trim` doesn't support -c:v {codec} — run `splica process` separately to set codec"
+        ));
+    }
+
+    warnings
 }
 
 // ---------------------------------------------------------------------------
@@ -547,6 +589,44 @@ mod tests {
             cmd,
             "splica trim --input input.mp4 --output output.mp4 --start 1:30"
         );
+    }
+
+    #[test]
+    fn test_that_trim_with_resize_warns_about_dropped_flag() {
+        let (_, cmd, explanation) =
+            run("ffmpeg -i input.mp4 -ss 1:30 -vf scale=1280:720 output.mp4");
+
+        assert_eq!(
+            cmd,
+            "splica trim --input input.mp4 --output output.mp4 --start 1:30"
+        );
+        assert!(explanation.iter().any(|line| line.starts_with("Warning:")
+            && line.contains("-vf scale=1280:720")
+            && line.contains("resize")));
+    }
+
+    #[test]
+    fn test_that_trim_with_crf_warns_about_dropped_flag() {
+        let (_, cmd, explanation) = run("ffmpeg -i input.mp4 -ss 1:30 -crf 23 output.mp4");
+
+        assert_eq!(
+            cmd,
+            "splica trim --input input.mp4 --output output.mp4 --start 1:30"
+        );
+        assert!(explanation
+            .iter()
+            .any(|line| line.starts_with("Warning:") && line.contains("-crf 23")));
+    }
+
+    #[test]
+    fn test_that_trim_without_encoding_flags_has_no_warnings() {
+        let (_, cmd, explanation) = run("ffmpeg -i input.mp4 -ss 1:30 -to 2:00 output.mp4");
+
+        assert_eq!(
+            cmd,
+            "splica trim --input input.mp4 --output output.mp4 --start 1:30 --end 2:00"
+        );
+        assert!(!explanation.iter().any(|line| line.starts_with("Warning:")));
     }
 
     #[test]
