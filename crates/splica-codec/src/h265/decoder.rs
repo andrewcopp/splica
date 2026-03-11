@@ -232,7 +232,10 @@ impl Decoder for H265Decoder {
                 }
 
                 if let Some(image) = self.inner.get_next_picture() {
-                    let pts = splica_core::Timestamp::new(0, 1).unwrap();
+                    // Recover PTS from libde265 (stored as microseconds via push_data)
+                    let pts_us = image.get_image_pts();
+                    let pts = splica_core::Timestamp::new(pts_us, 1_000_000)
+                        .unwrap_or_else(|| splica_core::Timestamp::new(0, 1).unwrap());
                     let frame = Self::image_to_video_frame(&image, pts)?;
                     self.pending_frame = Some(frame);
                 } else {

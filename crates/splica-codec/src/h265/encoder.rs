@@ -365,13 +365,8 @@ impl H265Encoder {
                 self.header_sent = true;
             }
 
-            // Reconstruct PTS from the source picture's pts field, or use frame count
-            let pts_ticks = if !src_out.is_null() {
-                // src_out was already freed above, so use info_out.poc
-                info_out.poc as i64
-            } else {
-                info_out.poc as i64
-            };
+            // Use picture order count (poc) for PTS reconstruction
+            let pts_ticks = info_out.poc as i64;
 
             // Use poc as the basis for pts (in encoder timebase units)
             let timebase = self
