@@ -258,6 +258,45 @@ fn test_that_h264_decoder_decodes_encoded_frames() {
 }
 
 #[test]
+fn test_that_h264_decoder_flush_preserves_all_buffered_frames() {
+    // GIVEN — encode 30 frames at 64x64 (enough to exercise B-frame buffering)
+    let (avcc, mp4_packets) = encode_test_frames(64, 64, 30);
+
+    // WHEN — decode all packets and flush
+    let mut decoder = H264Decoder::new(&avcc).unwrap();
+    let mut decoded_count = 0;
+
+    for (i, pkt_data) in mp4_packets.iter().enumerate() {
+        let packet = Packet {
+            track_index: TrackIndex(0),
+            pts: Timestamp::new(i as i64, 30).unwrap(),
+            dts: Timestamp::new(i as i64, 30).unwrap(),
+            is_keyframe: i == 0,
+            data: Bytes::from(pkt_data.clone()),
+        };
+
+        decoder.send_packet(Some(&packet)).unwrap();
+        while let Some(_frame) = decoder.receive_frame().unwrap() {
+            decoded_count += 1;
+        }
+    }
+
+    // Flush decoder to get any remaining buffered frames
+    decoder.send_packet(None).unwrap();
+    while let Some(_frame) = decoder.receive_frame().unwrap() {
+        decoded_count += 1;
+    }
+
+    // THEN — decoded frame count should match encoded packet count
+    assert_eq!(
+        decoded_count,
+        mp4_packets.len(),
+        "decoded frame count ({decoded_count}) should match encoded packet count ({})",
+        mp4_packets.len()
+    );
+}
+
+#[test]
 fn test_that_h264_decoder_rejects_invalid_avcc() {
     // GIVEN — garbage avcC data
     let result = H264Decoder::new(&[0xFF, 0xFF]);

@@ -4,6 +4,7 @@
 //! This module uses only the safe Rust API provided by that crate.
 
 use std::any::Any;
+use std::collections::VecDeque;
 
 use bytes::Bytes;
 use splica_core::error::DecodeError;
@@ -94,8 +95,9 @@ pub struct H264Decoder {
     avcc_config: AvcDecoderConfig,
     /// Whether SPS/PPS have been sent to the decoder.
     initialized: bool,
-    /// Buffered decoded frame (send/receive pattern: one frame per packet).
-    pending_frame: Option<VideoFrame>,
+    /// Buffered decoded frames (B-frame reordering may produce multiple
+    /// frames per decode cycle, and flush may return several at once).
+    pending_frames: VecDeque<VideoFrame>,
     /// Whether end-of-stream has been signaled.
     flushing: bool,
     /// Color space parsed from the SPS VUI parameters.
@@ -128,7 +130,7 @@ impl H264Decoder {
             inner,
             avcc_config,
             initialized: false,
-            pending_frame: None,
+            pending_frames: VecDeque::new(),
             flushing: false,
             color_space,
         })
@@ -268,11 +270,10 @@ impl Decoder for H264Decoder {
                 match self.inner.decode(&annex_b) {
                     Ok(Some(yuv)) => {
                         let frame = Self::yuv_to_video_frame(&yuv, pkt.pts, self.color_space)?;
-                        self.pending_frame = Some(frame);
+                        self.pending_frames.push_back(frame);
                     }
                     Ok(None) => {
                         // No frame produced yet (buffering, B-frame reordering, etc.)
-                        self.pending_frame = None;
                     }
                     Err(e) => {
                         // OpenH264 docs say: don't terminate on first errors,
@@ -290,15 +291,12 @@ impl Decoder for H264Decoder {
                 self.flushing = true;
                 match self.inner.flush_remaining() {
                     Ok(frames) => {
-                        // Take the first flushed frame if any
-                        if let Some(yuv) = frames.first() {
+                        for yuv in &frames {
                             // Use a zero timestamp for flushed frames — caller
                             // should use the last known PTS
                             let pts = splica_core::Timestamp::new(0, 1).unwrap();
                             let frame = Self::yuv_to_video_frame(yuv, pts, self.color_space)?;
-                            self.pending_frame = Some(frame);
-                        } else {
-                            self.pending_frame = None;
+                            self.pending_frames.push_back(frame);
                         }
                     }
                     Err(e) => {
@@ -315,7 +313,7 @@ impl Decoder for H264Decoder {
     }
 
     fn receive_frame(&mut self) -> Result<Option<Frame>, DecodeError> {
-        Ok(self.pending_frame.take().map(Frame::Video))
+        Ok(self.pending_frames.pop_front().map(Frame::Video))
     }
 
     fn as_any(&self) -> &dyn Any {
