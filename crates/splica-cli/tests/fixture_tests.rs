@@ -421,6 +421,7 @@ fn test_that_process_of_av1_with_resize_succeeds() {
 // ---------------------------------------------------------------------------
 
 #[test]
+#[ignore] // rav1e is ~400s in debug mode; run with `cargo test -- --ignored`
 fn test_that_process_to_webm_produces_av1_output() {
     // AV1 input → WebM output should re-encode as AV1 via rav1e.
     let output = splica_binary()
