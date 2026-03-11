@@ -1,0 +1,4 @@
+# Linker search paths for system libraries installed via Homebrew.
+# libde265 (H.265 decoder) and opus are installed to /opt/homebrew/lib on macOS ARM.
+[target.aarch64-apple-darwin]
+rustflags = ["-L", "/opt/homebrew/lib"]

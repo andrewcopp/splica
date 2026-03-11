@@ -262,3 +262,36 @@ fn test_that_probe_json_of_corrupt_file_reports_bad_input_error_kind() {
 
     let _ = std::fs::remove_file(&path);
 }
+
+// ---------------------------------------------------------------------------
+// H.265 decode (SPL-82)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_that_process_of_h265_with_resize_succeeds() {
+    // H.265 input should be decodable via libde265 and re-encoded as H.264.
+    let output = splica_binary()
+        .args([
+            "process",
+            "-i",
+            &fixture_path("bigbuckbunny_h265.mp4"),
+            "-o",
+            "/tmp/splica_test_h265_reencode.mp4",
+            "--resize",
+            "320x180",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "H.265 process with resize should succeed. stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Verify output exists and is non-empty
+    let meta = std::fs::metadata("/tmp/splica_test_h265_reencode.mp4").unwrap();
+    assert!(meta.len() > 0, "output file should be non-empty");
+
+    let _ = std::fs::remove_file("/tmp/splica_test_h265_reencode.mp4");
+}

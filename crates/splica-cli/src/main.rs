@@ -7,7 +7,8 @@ use miette::{Context, IntoDiagnostic, Result};
 use serde::Serialize;
 
 use splica_codec::{
-    AacDecoder, AacEncoderBuilder, H264Decoder, H264EncoderBuilder, OpusDecoder, OpusEncoderBuilder,
+    AacDecoder, AacEncoderBuilder, H264Decoder, H264EncoderBuilder, H265Decoder, OpusDecoder,
+    OpusEncoderBuilder,
 };
 use splica_core::{
     AudioCodec, Codec, DecodeError, DemuxError, Demuxer, EncodeError, ErrorKind, FilterError,
@@ -1242,9 +1243,20 @@ struct AudioCodecConfig {
     channel_layout: Option<splica_core::media::ChannelLayout>,
 }
 
+/// Video codec configuration extracted from the container for re-encoding.
+enum VideoTrackCodec {
+    H264,
+    H265,
+}
+
 type DemuxerWithConfigs = (
     Box<dyn Demuxer>,
-    Vec<(TrackIndex, Vec<u8>, Option<splica_core::ColorSpace>)>,
+    Vec<(
+        TrackIndex,
+        VideoTrackCodec,
+        Vec<u8>,
+        Option<splica_core::ColorSpace>,
+    )>,
     Vec<AudioCodecConfig>,
 );
 
@@ -1291,13 +1303,34 @@ fn process_inner(args: &ProcessArgs<'_>, json_mode: bool) -> Result<TranscodeOut
             let mut audio_configs = Vec::new();
             for track in &tracks {
                 if track.kind == TrackKind::Video {
-                    if let Codec::Video(VideoCodec::H264) = &track.codec {
-                        if let Some(CodecConfig::Avc1 {
-                            avcc, color_space, ..
-                        }) = mp4.codec_config(track.index)
-                        {
-                            video_configs.push((track.index, avcc.to_vec(), *color_space));
+                    match &track.codec {
+                        Codec::Video(VideoCodec::H264) => {
+                            if let Some(CodecConfig::Avc1 {
+                                avcc, color_space, ..
+                            }) = mp4.codec_config(track.index)
+                            {
+                                video_configs.push((
+                                    track.index,
+                                    VideoTrackCodec::H264,
+                                    avcc.to_vec(),
+                                    *color_space,
+                                ));
+                            }
                         }
+                        Codec::Video(VideoCodec::H265) => {
+                            if let Some(CodecConfig::Hev1 {
+                                hvcc, color_space, ..
+                            }) = mp4.codec_config(track.index)
+                            {
+                                video_configs.push((
+                                    track.index,
+                                    VideoTrackCodec::H265,
+                                    hvcc.to_vec(),
+                                    *color_space,
+                                ));
+                            }
+                        }
+                        _ => {}
                     }
                 }
                 if track.kind == TrackKind::Audio {
@@ -1410,10 +1443,10 @@ fn process_inner(args: &ProcessArgs<'_>, json_mode: bool) -> Result<TranscodeOut
         return stream_copy(args, json_mode);
     }
 
-    // Re-encode path: we need H.264 video tracks with avcc config to decode+encode
+    // Re-encode path: we need video tracks with supported codec config to decode+encode
     if video_track_configs.is_empty() {
         return Err(miette::miette!(
-            "no H.264 video tracks found in '{}' — re-encoding currently supports H.264 video only",
+            "no supported video tracks found in '{}' — re-encoding supports H.264 and H.265",
             args.input.display()
         ));
     }
@@ -1475,10 +1508,21 @@ fn process_inner(args: &ProcessArgs<'_>, json_mode: bool) -> Result<TranscodeOut
         .with_demuxer(demuxer)
         .with_muxer(muxer);
 
-    for (track_idx, avcc_data, color_space) in &video_track_configs {
-        let decoder = H264Decoder::new(avcc_data)
-            .into_diagnostic()
-            .wrap_err("failed to create H.264 decoder")?;
+    for (track_idx, video_codec, config_data, color_space) in &video_track_configs {
+        match video_codec {
+            VideoTrackCodec::H264 => {
+                let decoder = H264Decoder::new(config_data)
+                    .into_diagnostic()
+                    .wrap_err("failed to create H.264 decoder")?;
+                builder = builder.with_decoder(*track_idx, decoder);
+            }
+            VideoTrackCodec::H265 => {
+                let decoder = H265Decoder::new(config_data)
+                    .into_diagnostic()
+                    .wrap_err("failed to create H.265 decoder")?;
+                builder = builder.with_decoder(*track_idx, decoder);
+            }
+        }
 
         let mut enc_builder = H264EncoderBuilder::new()
             .bitrate(bitrate_bps)
@@ -1494,7 +1538,6 @@ fn process_inner(args: &ProcessArgs<'_>, json_mode: bool) -> Result<TranscodeOut
             .into_diagnostic()
             .wrap_err("failed to create H.264 encoder")?;
 
-        builder = builder.with_decoder(*track_idx, decoder);
         builder = builder.with_encoder(*track_idx, encoder);
 
         // Add scale filter if --resize was specified

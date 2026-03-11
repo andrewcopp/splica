@@ -45,6 +45,7 @@ pub mod aac;
 pub(crate) mod color;
 pub mod error;
 pub mod h264;
+pub mod h265;
 pub mod opus;
 
 #[cfg(feature = "codec-h264")]
@@ -54,6 +55,9 @@ pub use h264::{H264Decoder, H264DecoderConfig, H264Profile};
 pub use h264::{
     H264Encoder, H264EncoderBuilder, H264EncoderConfig, H264EncoderLevel, H264EncoderProfile,
 };
+
+#[cfg(feature = "codec-h265")]
+pub use h265::{H265Decoder, H265DecoderConfig};
 
 #[cfg(feature = "codec-aac")]
 pub use aac::{AacDecoder, AacDecoderConfig};
