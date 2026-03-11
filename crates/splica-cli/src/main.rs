@@ -241,6 +241,15 @@ enum AudioMode {
 }
 
 #[derive(Serialize)]
+struct ProgressEvent {
+    status: String,
+    packets_read: u64,
+    frames_decoded: u64,
+    frames_encoded: u64,
+    packets_written: u64,
+}
+
+#[derive(Serialize)]
 struct ErrorResult {
     status: String,
     error_kind: String,
@@ -1131,7 +1140,7 @@ fn process(args: &ProcessArgs<'_>, format: &OutputFormat) -> Result<()> {
                     packets_written,
                     audio_tracks,
                 };
-                println!("{}", serde_json::to_string_pretty(&output_json).unwrap());
+                println!("{}", serde_json::to_string(&output_json).unwrap());
                 Ok(())
             }
             Err(e) => {
@@ -1141,7 +1150,7 @@ fn process(args: &ProcessArgs<'_>, format: &OutputFormat) -> Result<()> {
                     error_kind: error_kind.to_string(),
                     message: format!("{e}"),
                 };
-                println!("{}", serde_json::to_string_pretty(&error_json).unwrap());
+                println!("{}", serde_json::to_string(&error_json).unwrap());
                 std::process::exit(code);
             }
         }
@@ -1360,7 +1369,19 @@ fn process_inner(args: &ProcessArgs<'_>, json_mode: bool) -> Result<TranscodeOut
         .with_event_handler(move |event| match event.kind {
             PipelineEventKind::PacketsRead { count } => {
                 pr.store(count, Ordering::Relaxed);
-                if !json_mode && count % 100 == 0 {
+                if json_mode {
+                    if count % 100 == 0 {
+                        let progress = ProgressEvent {
+                            status: "progress".to_string(),
+                            packets_read: count,
+                            frames_decoded: fd.load(Ordering::Relaxed),
+                            frames_encoded: fe.load(Ordering::Relaxed),
+                            packets_written: pw.load(Ordering::Relaxed),
+                        };
+                        // NDJSON: one compact JSON object per line
+                        println!("{}", serde_json::to_string(&progress).unwrap());
+                    }
+                } else if count % 100 == 0 {
                     eprint!("\r  Packets read: {count}");
                 }
             }
