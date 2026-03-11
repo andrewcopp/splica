@@ -6,6 +6,7 @@ use miette::{Context, IntoDiagnostic, Result};
 
 use splica_core::{Codec, ColorSpace, Demuxer, TrackIndex, TrackKind, VideoCodec};
 use splica_filter::VolumeFilter;
+use splica_mkv::MkvDemuxer;
 use splica_mp4::boxes::stsd::CodecConfig;
 use splica_mp4::Mp4Demuxer;
 use splica_webm::WebmDemuxer;
@@ -203,6 +204,7 @@ pub(super) fn open_demuxer_with_configs(input: &Path) -> Result<DemuxerWithConfi
     match format {
         DetectedFormat::Mp4 => open_mp4_configs(file),
         DetectedFormat::WebM => open_webm_configs(file),
+        DetectedFormat::Mkv => open_mkv_configs(file),
     }
 }
 
@@ -315,4 +317,29 @@ fn open_webm_configs(file: File) -> Result<DemuxerWithConfigs> {
     }
     // WebM doesn't expose MP4-style codec config; H.264 in WebM is unsupported
     Ok((Box::new(webm), Vec::new(), audio_configs))
+}
+
+fn open_mkv_configs(file: File) -> Result<DemuxerWithConfigs> {
+    let mkv = MkvDemuxer::open(BufReader::new(file))
+        .into_diagnostic()
+        .wrap_err("failed to parse MKV container")?;
+    let tracks = mkv.tracks().to_vec();
+    let mut audio_configs = Vec::new();
+    for track in &tracks {
+        if track.kind == TrackKind::Audio {
+            if let Codec::Audio(ref audio_codec) = track.codec {
+                audio_configs.push(AudioCodecConfig {
+                    track_index: track.index,
+                    codec: audio_codec.clone(),
+                    config_data: None,
+                    sample_rate: track.audio.as_ref().map(|a| a.sample_rate).unwrap_or(48000),
+                    channel_layout: track.audio.as_ref().and_then(|a| a.channel_layout),
+                });
+            }
+        }
+    }
+    // MKV codec_private is available via MkvDemuxer::codec_private() but is
+    // not in MP4 format — video configs are left empty for now (decode will
+    // use in-band parameter sets).
+    Ok((Box::new(mkv), Vec::new(), audio_configs))
 }
