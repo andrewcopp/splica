@@ -174,6 +174,36 @@ A file over 300 lines or a function over 30 lines is a signal to stop and reeval
 
 No global mutable state. No lazy_static configuration. No implicit initialization. If a function needs a codec registry, it takes one as a parameter. If a pipeline needs a thread pool, it's passed in at construction.
 
+## Work Modes
+
+Every change falls into exactly one of three modes. Never mix modes in a single commit.
+
+### 1. Feature (`feat:`) — Adding or changing functionality
+
+New capabilities, new commands, new trait implementations, new API surface. The diff should be about *what the code does*.
+
+### 2. Fix (`fix:`) — Correcting broken behavior
+
+Bug fixes, error handling corrections, wrong output. The diff should be about *making existing behavior correct*.
+
+### 3. Refactor (`refactor:`) — Improving structure without changing behavior
+
+Renaming, extracting types, moving modules, cleaning up clippy warnings, DRY violations, dependency injection. The diff should be about *how the code is organized*. Tests should pass before and after with the same results.
+
+### Rules
+
+- **One mode per commit.** Every commit message starts with `feat:`, `fix:`, or `refactor:`. If a diff touches both behavior and structure, it's two commits.
+- **One task per PR.** A PR may contain multiple commits across modes (e.g., a refactor commit followed by a feature commit), but they all serve the same task.
+- **Discovery is expected.** When working on a feature or fix, you'll often discover a refactor is needed first. That's fine — stop, do the refactor, commit it, then continue with the original work. Don't try to do both at once.
+- **Call it out.** If you notice mode mixing (yours or someone else's), flag it. "This commit is changing behavior and renaming — can we split it?" Scope creep is the enemy of reviewable diffs.
+- **Refactors are first-class work.** They aren't second-class citizens that get smuggled into feature commits. They get their own commits, their own review consideration, and their own justification.
+
+### How this maps to the team
+
+- **Sam (product lead)** generates feature work from persona needs → `feat:` commits
+- **Dana (tech lead)** generates refactor work from debt reviews → `refactor:` commits
+- **Bug fixes** come from either — tests, focus groups, or production issues → `fix:` commits
+
 ## Code Conventions
 
 - **No `unwrap()` in library code** — use `?` or explicit error handling
