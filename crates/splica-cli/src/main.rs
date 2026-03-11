@@ -121,6 +121,10 @@ enum Commands {
         /// Output file path.
         #[arg(short, long)]
         output: PathBuf,
+
+        /// Output format.
+        #[arg(long, default_value = "text")]
+        format: OutputFormat,
     },
 
     /// Translate an ffmpeg command into the equivalent splica command.
@@ -225,9 +229,11 @@ fn main() -> Result<()> {
             end,
             format,
         } => commands::trim::trim(&input, &output, start.as_deref(), end.as_deref(), &format),
-        Commands::ExtractAudio { input, output } => {
-            commands::extract_audio::extract_audio(&input, &output)
-        }
+        Commands::ExtractAudio {
+            input,
+            output,
+            format,
+        } => commands::extract_audio::extract_audio(&input, &output, &format),
         Commands::Migrate { command } => commands::migrate::migrate(&command),
         Commands::Convert { input, output } => {
             eprintln!("Warning: `convert` is deprecated, use `process` instead.");

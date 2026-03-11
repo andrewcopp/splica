@@ -1,16 +1,54 @@
 use std::path::Path;
 
 use miette::{Context, IntoDiagnostic, Result};
+use serde::Serialize;
 
 use splica_core::TrackKind;
 
-use super::{create_muxer, open_demuxer, validate_output_format};
+use super::{
+    classify_error, create_muxer, open_demuxer, validate_output_format, ErrorResult, OutputFormat,
+};
+
+// ---------------------------------------------------------------------------
+// Extract audio types
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize)]
+struct ExtractAudioResult {
+    #[serde(rename = "type")]
+    event_type: &'static str,
+    input: String,
+    output: String,
+    audio_tracks: usize,
+    packets_written: u64,
+}
 
 // ---------------------------------------------------------------------------
 // Extract audio command
 // ---------------------------------------------------------------------------
 
-pub(crate) fn extract_audio(input: &Path, output: &Path) -> Result<()> {
+pub(crate) fn extract_audio(input: &Path, output: &Path, format: &OutputFormat) -> Result<()> {
+    let json_mode = matches!(format, OutputFormat::Json);
+
+    let result = extract_audio_inner(input, output, format);
+
+    if json_mode {
+        if let Err(e) = result {
+            let (error_kind, code) = classify_error(&e);
+            let error_json = ErrorResult {
+                event_type: "error",
+                error_kind: error_kind.to_string(),
+                message: format!("{e}"),
+            };
+            println!("{}", serde_json::to_string_pretty(&error_json).unwrap());
+            std::process::exit(code);
+        }
+    }
+
+    result
+}
+
+fn extract_audio_inner(input: &Path, output: &Path, format: &OutputFormat) -> Result<()> {
     validate_output_format(output)?;
     let mut demuxer = open_demuxer(input)?;
 
@@ -67,11 +105,26 @@ pub(crate) fn extract_audio(input: &Path, output: &Path) -> Result<()> {
         .into_diagnostic()
         .wrap_err("failed to finalize output")?;
 
-    eprintln!(
-        "Extracted {packet_count} audio packets ({} audio tracks) to {}",
-        audio_tracks.len(),
-        output.display()
-    );
+    match format {
+        OutputFormat::Json => {
+            let result = ExtractAudioResult {
+                event_type: "complete",
+                input: input.display().to_string(),
+                output: output.display().to_string(),
+                audio_tracks: audio_tracks.len(),
+                packets_written: packet_count,
+            };
+            let json = serde_json::to_string_pretty(&result).into_diagnostic()?;
+            println!("{json}");
+        }
+        OutputFormat::Text => {
+            eprintln!(
+                "Extracted {packet_count} audio packets ({} audio tracks) to {}",
+                audio_tracks.len(),
+                output.display()
+            );
+        }
+    }
 
     Ok(())
 }
