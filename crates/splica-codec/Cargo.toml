@@ -10,6 +10,7 @@ description = "Codec trait implementations and FFI wrappers for the splica media
 [features]
 codec-h264 = ["dep:openh264"]
 codec-h265 = ["dep:libde265"]
+codec-av1 = ["dep:dav1d", "dep:num-traits"]
 codec-aac = ["dep:symphonia-core", "dep:symphonia-codec-aac"]
 codec-aac-enc = ["dep:fdk-aac"]
 codec-opus = ["dep:opus"]
@@ -24,3 +25,5 @@ symphonia-core = { version = "0.5", optional = true }
 symphonia-codec-aac = { version = "0.5", optional = true }
 fdk-aac = { version = "0.8", optional = true }
 opus = { version = "0.3", optional = true }
+dav1d = { version = "0.11", optional = true }
+num-traits = { version = "0.2", optional = true }

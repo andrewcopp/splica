@@ -7,8 +7,8 @@ use miette::{Context, IntoDiagnostic, Result};
 use serde::Serialize;
 
 use splica_codec::{
-    AacDecoder, AacEncoderBuilder, H264Decoder, H264EncoderBuilder, H265Decoder, OpusDecoder,
-    OpusEncoderBuilder,
+    AacDecoder, AacEncoderBuilder, Av1Decoder, H264Decoder, H264EncoderBuilder, H265Decoder,
+    OpusDecoder, OpusEncoderBuilder,
 };
 use splica_core::{
     AudioCodec, Codec, ContainerFormat, DecodeError, DemuxError, Demuxer, EncodeError, ErrorKind,
@@ -1319,6 +1319,7 @@ struct AudioCodecConfig {
 enum VideoTrackCodec {
     H264,
     H265,
+    Av1,
 }
 
 type DemuxerWithConfigs = (
@@ -1398,6 +1399,19 @@ fn process_inner(args: &ProcessArgs<'_>, json_mode: bool) -> Result<TranscodeOut
                                     track.index,
                                     VideoTrackCodec::H265,
                                     hvcc.to_vec(),
+                                    *color_space,
+                                ));
+                            }
+                        }
+                        Codec::Video(VideoCodec::Av1) => {
+                            if let Some(CodecConfig::Av1 {
+                                av1c, color_space, ..
+                            }) = mp4.codec_config(track.index)
+                            {
+                                video_configs.push((
+                                    track.index,
+                                    VideoTrackCodec::Av1,
+                                    av1c.to_vec(),
                                     *color_space,
                                 ));
                             }
@@ -1591,6 +1605,12 @@ fn process_inner(args: &ProcessArgs<'_>, json_mode: bool) -> Result<TranscodeOut
                 let decoder = H265Decoder::new(config_data)
                     .into_diagnostic()
                     .wrap_err("failed to create H.265 decoder")?;
+                builder = builder.with_decoder(*track_idx, decoder);
+            }
+            VideoTrackCodec::Av1 => {
+                let decoder = Av1Decoder::new(config_data)
+                    .into_diagnostic()
+                    .wrap_err("failed to create AV1 decoder")?;
                 builder = builder.with_decoder(*track_idx, decoder);
             }
         }

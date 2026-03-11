@@ -42,6 +42,7 @@
 //! should compile to <100KB wasm.
 
 pub mod aac;
+pub mod av1;
 pub(crate) mod color;
 pub mod error;
 pub mod h264;
@@ -70,3 +71,6 @@ pub use opus::{OpusDecoder, OpusDecoderConfig};
 
 #[cfg(feature = "codec-opus")]
 pub use opus::{OpusEncoder, OpusEncoderBuilder, OpusEncoderConfig};
+
+#[cfg(feature = "codec-av1")]
+pub use av1::Av1Decoder;

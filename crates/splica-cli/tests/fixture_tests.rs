@@ -382,3 +382,36 @@ fn test_that_process_of_h265_with_resize_succeeds() {
 
     let _ = std::fs::remove_file("/tmp/splica_test_h265_reencode.mp4");
 }
+
+// ---------------------------------------------------------------------------
+// AV1 decode (SPL-88)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_that_process_of_av1_with_resize_succeeds() {
+    // AV1 input should be decodable via dav1d and re-encoded as H.264.
+    let output = splica_binary()
+        .args([
+            "process",
+            "-i",
+            &fixture_path("bigbuckbunny_av1.mp4"),
+            "-o",
+            "/tmp/splica_test_av1_reencode.mp4",
+            "--resize",
+            "320x180",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "AV1 process with resize should succeed. stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Verify output exists and is non-empty
+    let meta = std::fs::metadata("/tmp/splica_test_av1_reencode.mp4").unwrap();
+    assert!(meta.len() > 0, "output file should be non-empty");
+
+    let _ = std::fs::remove_file("/tmp/splica_test_av1_reencode.mp4");
+}
