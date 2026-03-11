@@ -399,3 +399,93 @@ fn test_that_trim_without_start_includes_all_packets() {
     let _ = std::fs::remove_file(&input_path);
     let _ = std::fs::remove_file(&output_path);
 }
+
+#[test]
+fn test_that_trim_json_output_includes_packet_counts() {
+    // GIVEN
+    let dir = std::env::temp_dir().join("splica_test_trim");
+    std::fs::create_dir_all(&dir).unwrap();
+    let input_path = dir.join("trim_json_input.mp4");
+    let output_path = dir.join("trim_json_output.mp4");
+
+    let mp4_data = build_muxed_multi_sample_mp4();
+    std::fs::write(&input_path, &mp4_data).unwrap();
+
+    // WHEN — trim with --format json
+    let output = splica_binary()
+        .args([
+            "trim",
+            "-i",
+            input_path.to_str().unwrap(),
+            "-o",
+            output_path.to_str().unwrap(),
+            "--start",
+            "0.1",
+            "--end",
+            "0.3",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "trim --format json should succeed. stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // THEN — stdout should be valid JSON with expected fields
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("expected valid JSON, got error {e}: {stdout}"));
+
+    assert!(json["packets_written"].as_u64().unwrap() > 0);
+    assert!(json["packets_skipped"].as_u64().unwrap() > 0);
+    assert!(json["actual_start_seconds"].is_number());
+    assert!(json["actual_end_seconds"].is_number());
+    assert!(json["input"].as_str().is_some());
+    assert!(json["output"].as_str().is_some());
+
+    // Cleanup
+    let _ = std::fs::remove_file(&input_path);
+    let _ = std::fs::remove_file(&output_path);
+}
+
+#[test]
+fn test_that_trim_json_error_reports_bad_input() {
+    // GIVEN — a corrupt file
+    let dir = std::env::temp_dir().join("splica_test_trim");
+    std::fs::create_dir_all(&dir).unwrap();
+    let input_path = dir.join("trim_json_corrupt.mp4");
+    let output_path = dir.join("trim_json_corrupt_out.mp4");
+    std::fs::write(&input_path, b"not a valid media file").unwrap();
+
+    // WHEN — trim with --format json on corrupt input
+    let output = splica_binary()
+        .args([
+            "trim",
+            "-i",
+            input_path.to_str().unwrap(),
+            "-o",
+            output_path.to_str().unwrap(),
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    // THEN — should fail with structured JSON error
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("expected valid JSON error, got error {e}: {stdout}"));
+
+    assert_eq!(json["type"], "error");
+    assert_eq!(json["error_kind"], "bad_input");
+    assert!(json["message"].as_str().is_some());
+
+    // Cleanup
+    let _ = std::fs::remove_file(&input_path);
+    let _ = std::fs::remove_file(&output_path);
+}

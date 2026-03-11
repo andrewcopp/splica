@@ -102,6 +102,10 @@ enum Commands {
         /// End time (e.g., "2:00", "120", "0:02:00").
         #[arg(long)]
         end: Option<String>,
+
+        /// Output format.
+        #[arg(long, default_value = "text")]
+        format: OutputFormat,
     },
 
     /// Extract only audio tracks from a media file.
@@ -345,7 +349,8 @@ fn main() -> Result<()> {
             output,
             start,
             end,
-        } => trim(&input, &output, start.as_deref(), end.as_deref()),
+            format,
+        } => trim(&input, &output, start.as_deref(), end.as_deref(), &format),
         Commands::ExtractAudio { input, output } => extract_audio(&input, &output),
         Commands::Convert { input, output } => {
             eprintln!("Warning: `convert` is deprecated, use `process` instead.");
@@ -607,6 +612,16 @@ struct ProbeTrack {
     channel_layout: Option<String>,
 }
 
+#[derive(Serialize)]
+struct TrimResult {
+    input: String,
+    output: String,
+    packets_written: u64,
+    packets_skipped: u64,
+    actual_start_seconds: Option<f64>,
+    actual_end_seconds: Option<f64>,
+}
+
 fn probe(file: &Path, format: &OutputFormat) -> Result<()> {
     let json_mode = matches!(format, OutputFormat::Json);
 
@@ -838,7 +853,40 @@ fn stream_copy(args: &ProcessArgs<'_>, json_mode: bool) -> Result<TranscodeOutpu
 // trim
 // ---------------------------------------------------------------------------
 
-fn trim(input: &Path, output: &Path, start: Option<&str>, end: Option<&str>) -> Result<()> {
+fn trim(
+    input: &Path,
+    output: &Path,
+    start: Option<&str>,
+    end: Option<&str>,
+    format: &OutputFormat,
+) -> Result<()> {
+    let json_mode = matches!(format, OutputFormat::Json);
+
+    let result = trim_inner(input, output, start, end, format);
+
+    if json_mode {
+        if let Err(e) = result {
+            let (error_kind, code) = classify_error(&e);
+            let error_json = ErrorResult {
+                event_type: "error",
+                error_kind: error_kind.to_string(),
+                message: format!("{e}"),
+            };
+            println!("{}", serde_json::to_string_pretty(&error_json).unwrap());
+            std::process::exit(code);
+        }
+    }
+
+    result
+}
+
+fn trim_inner(
+    input: &Path,
+    output: &Path,
+    start: Option<&str>,
+    end: Option<&str>,
+    format: &OutputFormat,
+) -> Result<()> {
     validate_output_format(output)?;
     let start_secs = start.map(parse_time).transpose()?;
     let end_secs = end.map(parse_time).transpose()?;
@@ -864,6 +912,7 @@ fn trim(input: &Path, output: &Path, start: Option<&str>, end: Option<&str>) -> 
         std::collections::HashMap::new();
     let mut past_start = start_secs.is_none();
     let mut actual_start_secs: Option<f64> = None;
+    let mut actual_end_secs: Option<f64> = None;
 
     while let Some(packet) = demuxer
         .read_packet()
@@ -909,6 +958,8 @@ fn trim(input: &Path, output: &Path, start: Option<&str>, end: Option<&str>) -> 
             }
         }
 
+        actual_end_secs = Some(pts_secs);
+
         muxer
             .write_packet(&packet)
             .into_diagnostic()
@@ -921,32 +972,50 @@ fn trim(input: &Path, output: &Path, start: Option<&str>, end: Option<&str>) -> 
         .into_diagnostic()
         .wrap_err("failed to finalize output")?;
 
-    eprintln!(
-        "Trimmed: wrote {packet_count} packets, skipped {skipped} to {}",
-        output.display()
-    );
-    if let (Some(s), Some(e)) = (start_secs, end_secs) {
-        if let Some(actual) = actual_start_secs {
-            if (actual - s).abs() > 0.01 {
-                eprintln!("  Trimmed from {actual:.2}s (snapped from {s:.2}s to nearest keyframe) — {e:.2}s");
-            } else {
-                eprintln!("  Time range: {s:.2}s — {e:.2}s");
-            }
-        } else {
-            eprintln!("  Time range: {s:.2}s — {e:.2}s");
+    match format {
+        OutputFormat::Json => {
+            let result = TrimResult {
+                input: input.display().to_string(),
+                output: output.display().to_string(),
+                packets_written: packet_count,
+                packets_skipped: skipped,
+                actual_start_seconds: actual_start_secs,
+                actual_end_seconds: actual_end_secs,
+            };
+            let json = serde_json::to_string_pretty(&result).into_diagnostic()?;
+            println!("{json}");
         }
-    } else if let Some(s) = start_secs {
-        if let Some(actual) = actual_start_secs {
-            if (actual - s).abs() > 0.01 {
-                eprintln!("  Trimmed from {actual:.2}s (snapped from {s:.2}s to nearest keyframe)");
-            } else {
-                eprintln!("  Start: {s:.2}s");
+        OutputFormat::Text => {
+            eprintln!(
+                "Trimmed: wrote {packet_count} packets, skipped {skipped} to {}",
+                output.display()
+            );
+            if let (Some(s), Some(e)) = (start_secs, end_secs) {
+                if let Some(actual) = actual_start_secs {
+                    if (actual - s).abs() > 0.01 {
+                        eprintln!("  Trimmed from {actual:.2}s (snapped from {s:.2}s to nearest keyframe) — {e:.2}s");
+                    } else {
+                        eprintln!("  Time range: {s:.2}s — {e:.2}s");
+                    }
+                } else {
+                    eprintln!("  Time range: {s:.2}s — {e:.2}s");
+                }
+            } else if let Some(s) = start_secs {
+                if let Some(actual) = actual_start_secs {
+                    if (actual - s).abs() > 0.01 {
+                        eprintln!(
+                            "  Trimmed from {actual:.2}s (snapped from {s:.2}s to nearest keyframe)"
+                        );
+                    } else {
+                        eprintln!("  Start: {s:.2}s");
+                    }
+                } else {
+                    eprintln!("  Start: {s:.2}s");
+                }
+            } else if let Some(e) = end_secs {
+                eprintln!("  End: {e:.2}s");
             }
-        } else {
-            eprintln!("  Start: {s:.2}s");
         }
-    } else if let Some(e) = end_secs {
-        eprintln!("  End: {e:.2}s");
     }
 
     Ok(())
