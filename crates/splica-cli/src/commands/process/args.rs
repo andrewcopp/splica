@@ -1,0 +1,318 @@
+use std::fs::File;
+use std::io::BufReader;
+use std::path::Path;
+
+use miette::{Context, IntoDiagnostic, Result};
+
+use splica_core::{Codec, ColorSpace, Demuxer, TrackIndex, TrackKind, VideoCodec};
+use splica_filter::VolumeFilter;
+use splica_mp4::boxes::stsd::CodecConfig;
+use splica_mp4::Mp4Demuxer;
+use splica_webm::WebmDemuxer;
+
+use crate::commands::{detect_format, AspectModeArg, DetectedFormat, EncodePreset, VideoCodecArg};
+
+// ---------------------------------------------------------------------------
+// Process args
+// ---------------------------------------------------------------------------
+
+pub(crate) struct ProcessArgs<'a> {
+    pub input: &'a Path,
+    pub output: &'a Path,
+    pub bitrate: Option<&'a str>,
+    pub crf: Option<u8>,
+    pub preset: Option<&'a EncodePreset>,
+    pub max_fps: Option<f32>,
+    pub resize: Option<&'a str>,
+    pub aspect_mode_arg: &'a AspectModeArg,
+    pub crop: Option<&'a str>,
+    pub volume: Option<&'a str>,
+    pub codec: Option<&'a VideoCodecArg>,
+}
+
+// ---------------------------------------------------------------------------
+// Video track config
+// ---------------------------------------------------------------------------
+
+/// Video codec configuration extracted from the container for re-encoding.
+pub(super) enum VideoTrackCodec {
+    H264,
+    H265,
+    Av1,
+}
+
+/// Named struct replacing the inner 6-tuple in `DemuxerWithConfigs`.
+pub(super) struct VideoTrackConfig {
+    pub track_index: TrackIndex,
+    pub codec: VideoTrackCodec,
+    pub config_data: Vec<u8>,
+    pub color_space: Option<ColorSpace>,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// Audio codec config extracted from the demuxer for audio tracks.
+#[derive(Debug, Clone)]
+pub(super) struct AudioCodecConfig {
+    pub track_index: TrackIndex,
+    pub codec: splica_core::AudioCodec,
+    /// Raw codec-specific config (e.g., esds for AAC).
+    pub config_data: Option<Vec<u8>>,
+    pub sample_rate: u32,
+    pub channel_layout: Option<splica_core::media::ChannelLayout>,
+}
+
+pub(super) type DemuxerWithConfigs = (
+    Box<dyn splica_core::Demuxer>,
+    Vec<VideoTrackConfig>,
+    Vec<AudioCodecConfig>,
+);
+
+// ---------------------------------------------------------------------------
+// Parsing helpers
+// ---------------------------------------------------------------------------
+
+/// Parses a bitrate string like "2M", "1500k", or "1000000" into bits per second.
+pub(super) fn parse_bitrate(s: &str) -> Result<u32> {
+    let s = s.trim();
+    if let Some(prefix) = s.strip_suffix('M') {
+        let val: f64 = prefix
+            .parse()
+            .into_diagnostic()
+            .wrap_err_with(|| format!("invalid bitrate: '{s}'"))?;
+        Ok((val * 1_000_000.0) as u32)
+    } else if let Some(prefix) = s.strip_suffix('m') {
+        let val: f64 = prefix
+            .parse()
+            .into_diagnostic()
+            .wrap_err_with(|| format!("invalid bitrate: '{s}'"))?;
+        Ok((val * 1_000_000.0) as u32)
+    } else if let Some(prefix) = s.strip_suffix('k') {
+        let val: f64 = prefix
+            .parse()
+            .into_diagnostic()
+            .wrap_err_with(|| format!("invalid bitrate: '{s}'"))?;
+        Ok((val * 1_000.0) as u32)
+    } else if let Some(prefix) = s.strip_suffix('K') {
+        let val: f64 = prefix
+            .parse()
+            .into_diagnostic()
+            .wrap_err_with(|| format!("invalid bitrate: '{s}'"))?;
+        Ok((val * 1_000.0) as u32)
+    } else {
+        s.parse::<u32>().into_diagnostic().wrap_err_with(|| {
+            format!("invalid bitrate: '{s}' — use e.g. '2M', '1500k', or raw bps")
+        })
+    }
+}
+
+/// Parses a "WxH" resize string into (width, height).
+pub(super) fn parse_resize(s: &str) -> Result<(u32, u32)> {
+    let parts: Vec<&str> = s.split('x').collect();
+    if parts.len() != 2 {
+        return Err(miette::miette!(
+            "invalid resize format: '{s}' — use WxH (e.g., '1280x720')"
+        ));
+    }
+    let w: u32 = parts[0]
+        .parse()
+        .into_diagnostic()
+        .wrap_err_with(|| format!("invalid width in resize: '{s}'"))?;
+    let h: u32 = parts[1]
+        .parse()
+        .into_diagnostic()
+        .wrap_err_with(|| format!("invalid height in resize: '{s}'"))?;
+    if w == 0 || h == 0 {
+        return Err(miette::miette!("resize dimensions must be non-zero: '{s}'"));
+    }
+    Ok((w, h))
+}
+
+/// Parses a "WxH+X+Y" crop geometry string into (x, y, width, height).
+pub(super) fn parse_crop(s: &str) -> Result<(u32, u32, u32, u32)> {
+    // Expected format: WxH+X+Y (e.g., "1080x1080+420+0")
+    let parts: Vec<&str> = s.splitn(2, 'x').collect();
+    if parts.len() != 2 {
+        return Err(miette::miette!(
+            "invalid crop format: '{s}' — use WxH+X+Y (e.g., '1080x1080+420+0')"
+        ));
+    }
+    let w: u32 = parts[0]
+        .parse()
+        .into_diagnostic()
+        .wrap_err_with(|| format!("invalid width in crop: '{s}'"))?;
+
+    let rest = parts[1];
+    let plus_parts: Vec<&str> = rest.splitn(3, '+').collect();
+    if plus_parts.len() != 3 {
+        return Err(miette::miette!(
+            "invalid crop format: '{s}' — use WxH+X+Y (e.g., '1080x1080+420+0')"
+        ));
+    }
+    let h: u32 = plus_parts[0]
+        .parse()
+        .into_diagnostic()
+        .wrap_err_with(|| format!("invalid height in crop: '{s}'"))?;
+    let x: u32 = plus_parts[1]
+        .parse()
+        .into_diagnostic()
+        .wrap_err_with(|| format!("invalid X offset in crop: '{s}'"))?;
+    let y: u32 = plus_parts[2]
+        .parse()
+        .into_diagnostic()
+        .wrap_err_with(|| format!("invalid Y offset in crop: '{s}'"))?;
+
+    if w == 0 || h == 0 {
+        return Err(miette::miette!("crop dimensions must be non-zero: '{s}'"));
+    }
+
+    Ok((x, y, w, h))
+}
+
+pub(super) fn parse_volume(s: &str) -> Result<VolumeFilter> {
+    let s = s.trim();
+    if let Some(db_str) = s.strip_suffix("dB").or_else(|| s.strip_suffix("db")) {
+        let db: f32 = db_str
+            .trim()
+            .parse()
+            .into_diagnostic()
+            .wrap_err_with(|| format!("invalid dB value in volume: '{s}'"))?;
+        VolumeFilter::from_db(db)
+            .into_diagnostic()
+            .wrap_err_with(|| format!("invalid volume: '{s}'"))
+    } else {
+        let gain: f32 = s.parse().into_diagnostic().wrap_err_with(|| {
+            format!("invalid volume: '{s}' — use a number (e.g., '0.5') or dB value (e.g., '-6dB')")
+        })?;
+        VolumeFilter::new(gain)
+            .into_diagnostic()
+            .wrap_err_with(|| format!("invalid volume: '{s}'"))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Demuxer opening with codec configs
+// ---------------------------------------------------------------------------
+
+pub(super) fn open_demuxer_with_configs(input: &Path) -> Result<DemuxerWithConfigs> {
+    let mut file = File::open(input)
+        .into_diagnostic()
+        .wrap_err_with(|| format!("could not open file '{}'", input.display()))?;
+    let format = detect_format(&mut file)?;
+
+    match format {
+        DetectedFormat::Mp4 => open_mp4_configs(file),
+        DetectedFormat::WebM => open_webm_configs(file),
+    }
+}
+
+fn open_mp4_configs(file: File) -> Result<DemuxerWithConfigs> {
+    let mp4 = Mp4Demuxer::open(file)
+        .into_diagnostic()
+        .wrap_err("failed to parse MP4 container")?;
+    let tracks = mp4.tracks().to_vec();
+    let mut video_configs = Vec::new();
+    let mut audio_configs = Vec::new();
+    for track in &tracks {
+        if track.kind == TrackKind::Video {
+            match &track.codec {
+                Codec::Video(VideoCodec::H264) => {
+                    if let Some(CodecConfig::Avc1 {
+                        avcc,
+                        color_space,
+                        width,
+                        height,
+                    }) = mp4.codec_config(track.index)
+                    {
+                        video_configs.push(VideoTrackConfig {
+                            track_index: track.index,
+                            codec: VideoTrackCodec::H264,
+                            config_data: avcc.to_vec(),
+                            color_space: *color_space,
+                            width: *width as u32,
+                            height: *height as u32,
+                        });
+                    }
+                }
+                Codec::Video(VideoCodec::H265) => {
+                    if let Some(CodecConfig::Hev1 {
+                        hvcc,
+                        color_space,
+                        width,
+                        height,
+                    }) = mp4.codec_config(track.index)
+                    {
+                        video_configs.push(VideoTrackConfig {
+                            track_index: track.index,
+                            codec: VideoTrackCodec::H265,
+                            config_data: hvcc.to_vec(),
+                            color_space: *color_space,
+                            width: *width as u32,
+                            height: *height as u32,
+                        });
+                    }
+                }
+                Codec::Video(VideoCodec::Av1) => {
+                    if let Some(CodecConfig::Av1 {
+                        av1c,
+                        color_space,
+                        width,
+                        height,
+                    }) = mp4.codec_config(track.index)
+                    {
+                        video_configs.push(VideoTrackConfig {
+                            track_index: track.index,
+                            codec: VideoTrackCodec::Av1,
+                            config_data: av1c.to_vec(),
+                            color_space: *color_space,
+                            width: *width as u32,
+                            height: *height as u32,
+                        });
+                    }
+                }
+                _ => {}
+            }
+        }
+        if track.kind == TrackKind::Audio {
+            if let Codec::Audio(ref audio_codec) = track.codec {
+                let config_data =
+                    if let Some(CodecConfig::Mp4a { esds, .. }) = mp4.codec_config(track.index) {
+                        Some(esds.to_vec())
+                    } else {
+                        None
+                    };
+                audio_configs.push(AudioCodecConfig {
+                    track_index: track.index,
+                    codec: audio_codec.clone(),
+                    config_data,
+                    sample_rate: track.audio.as_ref().map(|a| a.sample_rate).unwrap_or(44100),
+                    channel_layout: track.audio.as_ref().and_then(|a| a.channel_layout),
+                });
+            }
+        }
+    }
+    Ok((Box::new(mp4), video_configs, audio_configs))
+}
+
+fn open_webm_configs(file: File) -> Result<DemuxerWithConfigs> {
+    let webm = WebmDemuxer::open(BufReader::new(file))
+        .into_diagnostic()
+        .wrap_err("failed to parse WebM container")?;
+    let tracks = webm.tracks().to_vec();
+    let mut audio_configs = Vec::new();
+    for track in &tracks {
+        if track.kind == TrackKind::Audio {
+            if let Codec::Audio(ref audio_codec) = track.codec {
+                audio_configs.push(AudioCodecConfig {
+                    track_index: track.index,
+                    codec: audio_codec.clone(),
+                    config_data: None,
+                    sample_rate: track.audio.as_ref().map(|a| a.sample_rate).unwrap_or(48000),
+                    channel_layout: track.audio.as_ref().and_then(|a| a.channel_layout),
+                });
+            }
+        }
+    }
+    // WebM doesn't expose MP4-style codec config; H.264 in WebM is unsupported
+    Ok((Box::new(webm), Vec::new(), audio_configs))
+}
