@@ -44,6 +44,7 @@
 pub mod aac;
 pub mod error;
 pub mod h264;
+pub mod opus;
 
 #[cfg(feature = "codec-h264")]
 pub use h264::{H264Decoder, H264DecoderConfig, H264Profile};
@@ -55,3 +56,9 @@ pub use h264::{
 
 #[cfg(feature = "codec-aac")]
 pub use aac::{AacDecoder, AacDecoderConfig};
+
+#[cfg(feature = "codec-aac-enc")]
+pub use aac::{AacEncoder, AacEncoderBuilder, AacEncoderConfig};
+
+#[cfg(feature = "codec-opus")]
+pub use opus::{OpusEncoder, OpusEncoderBuilder, OpusEncoderConfig};

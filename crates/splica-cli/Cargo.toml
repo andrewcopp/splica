@@ -13,7 +13,7 @@ path = "src/main.rs"
 
 [dependencies]
 splica-core.workspace = true
-splica-codec = { workspace = true, features = ["codec-h264"] }
+splica-codec = { workspace = true, features = ["codec-h264", "codec-aac", "codec-aac-enc", "codec-opus"] }
 splica-mp4.workspace = true
 splica-filter.workspace = true
 splica-pipeline.workspace = true

@@ -6,8 +6,10 @@ use clap::{Parser, Subcommand, ValueEnum};
 use miette::{Context, IntoDiagnostic, Result};
 use serde::Serialize;
 
-use splica_codec::{H264Decoder, H264EncoderBuilder};
-use splica_core::{Codec, Demuxer, Muxer, TrackIndex, TrackKind, VideoCodec};
+use splica_codec::{
+    AacDecoder, AacEncoderBuilder, H264Decoder, H264EncoderBuilder, OpusEncoderBuilder,
+};
+use splica_core::{AudioCodec, Codec, Demuxer, Muxer, TrackIndex, TrackKind, VideoCodec};
 use splica_filter::{AspectMode, ScaleFilter};
 use splica_mp4::boxes::stsd::CodecConfig;
 use splica_mp4::{Mp4Demuxer, Mp4Muxer};
@@ -910,7 +912,22 @@ fn transcode(args: &TranscodeArgs<'_>, format: &OutputFormat) -> Result<()> {
 }
 
 type TranscodeOutput = (u64, u64, u64, u64, Vec<TranscodeAudioInfo>);
-type DemuxerWithConfigs = (Box<dyn Demuxer>, Vec<(TrackIndex, Vec<u8>)>);
+/// Audio codec config extracted from the demuxer for audio tracks.
+#[derive(Debug, Clone)]
+struct AudioCodecConfig {
+    track_index: TrackIndex,
+    codec: splica_core::AudioCodec,
+    /// Raw codec-specific config (e.g., esds for AAC).
+    config_data: Option<Vec<u8>>,
+    sample_rate: u32,
+    channel_layout: Option<splica_core::media::ChannelLayout>,
+}
+
+type DemuxerWithConfigs = (
+    Box<dyn Demuxer>,
+    Vec<(TrackIndex, Vec<u8>)>,
+    Vec<AudioCodecConfig>,
+);
 
 fn transcode_inner(args: &TranscodeArgs<'_>, json_mode: bool) -> Result<TranscodeOutput> {
     validate_output_format(args.output)?;
@@ -935,52 +952,109 @@ fn transcode_inner(args: &TranscodeArgs<'_>, json_mode: bool) -> Result<Transcod
         .wrap_err_with(|| format!("could not open file '{}'", args.input.display()))?;
     let format = detect_format(&mut file)?;
 
-    let (demuxer, video_track_configs): DemuxerWithConfigs = match format {
+    let (demuxer, video_track_configs, audio_track_configs): DemuxerWithConfigs = match format {
         ContainerFormat::Mp4 => {
             let mp4 = Mp4Demuxer::open(file)
                 .into_diagnostic()
                 .wrap_err("failed to parse MP4 container")?;
             let tracks = mp4.tracks().to_vec();
-            let mut configs = Vec::new();
+            let mut video_configs = Vec::new();
+            let mut audio_configs = Vec::new();
             for track in &tracks {
                 if track.kind == TrackKind::Video {
                     if let Codec::Video(VideoCodec::H264) = &track.codec {
                         if let Some(CodecConfig::Avc1 { avcc, .. }) = mp4.codec_config(track.index)
                         {
-                            configs.push((track.index, avcc.to_vec()));
+                            video_configs.push((track.index, avcc.to_vec()));
                         }
                     }
                 }
+                if track.kind == TrackKind::Audio {
+                    if let Codec::Audio(ref audio_codec) = track.codec {
+                        let config_data = if let Some(CodecConfig::Mp4a { esds, .. }) =
+                            mp4.codec_config(track.index)
+                        {
+                            Some(esds.to_vec())
+                        } else {
+                            None
+                        };
+                        audio_configs.push(AudioCodecConfig {
+                            track_index: track.index,
+                            codec: audio_codec.clone(),
+                            config_data,
+                            sample_rate: track
+                                .audio
+                                .as_ref()
+                                .map(|a| a.sample_rate)
+                                .unwrap_or(44100),
+                            channel_layout: track.audio.as_ref().and_then(|a| a.channel_layout),
+                        });
+                    }
+                }
             }
-            (Box::new(mp4), configs)
+            (Box::new(mp4), video_configs, audio_configs)
         }
         ContainerFormat::WebM => {
             let webm = WebmDemuxer::open(BufReader::new(file))
                 .into_diagnostic()
                 .wrap_err("failed to parse WebM container")?;
+            let tracks = webm.tracks().to_vec();
+            let mut audio_configs = Vec::new();
+            for track in &tracks {
+                if track.kind == TrackKind::Audio {
+                    if let Codec::Audio(ref audio_codec) = track.codec {
+                        audio_configs.push(AudioCodecConfig {
+                            track_index: track.index,
+                            codec: audio_codec.clone(),
+                            config_data: None,
+                            sample_rate: track
+                                .audio
+                                .as_ref()
+                                .map(|a| a.sample_rate)
+                                .unwrap_or(48000),
+                            channel_layout: track.audio.as_ref().and_then(|a| a.channel_layout),
+                        });
+                    }
+                }
+            }
             // WebM doesn't expose MP4-style codec config; H.264 in WebM is unsupported
-            (Box::new(webm), Vec::new())
+            (Box::new(webm), Vec::new(), audio_configs)
         }
     };
 
-    let tracks = demuxer.tracks().to_vec();
+    // Determine target audio codec based on output container
+    let output_is_webm = is_webm_output(args.output);
+    let target_audio_codec = if output_is_webm {
+        splica_core::AudioCodec::Opus
+    } else {
+        splica_core::AudioCodec::Aac
+    };
+
+    // Determine which audio tracks need transcoding vs pass-through
+    let audio_needs_transcode: Vec<bool> = audio_track_configs
+        .iter()
+        .map(|ac| ac.codec != target_audio_codec)
+        .collect();
 
     // Collect audio track metadata for JSON output
-    let audio_tracks: Vec<TranscodeAudioInfo> = tracks
+    let audio_tracks: Vec<TranscodeAudioInfo> = audio_track_configs
         .iter()
-        .filter(|t| t.kind == TrackKind::Audio)
-        .map(|t| {
-            let codec = format_codec(&t.codec);
-            let sample_rate = t.audio.as_ref().map(|a| a.sample_rate).unwrap_or(0);
-            let channels = t
-                .audio
-                .as_ref()
-                .and_then(|a| a.channel_layout.map(|cl| cl.channel_count()));
+        .zip(audio_needs_transcode.iter())
+        .map(|(ac, &needs_transcode)| {
+            let codec = match &ac.codec {
+                splica_core::AudioCodec::Aac => "AAC".to_string(),
+                splica_core::AudioCodec::Opus => "Opus".to_string(),
+                splica_core::AudioCodec::Other(s) => s.clone(),
+            };
             TranscodeAudioInfo {
                 codec,
-                sample_rate,
-                channels,
-                mode: "pass_through".to_string(),
+                sample_rate: ac.sample_rate,
+                channels: ac.channel_layout.map(|cl| cl.channel_count()),
+                mode: if needs_transcode {
+                    "transcode".to_string()
+                } else {
+                    "pass_through".to_string()
+                },
             }
         })
         .collect();
@@ -1063,6 +1137,81 @@ fn transcode_inner(args: &TranscodeArgs<'_>, json_mode: bool) -> Result<Transcod
             };
             let scale_filter = ScaleFilter::new(w, h).with_aspect_mode(aspect_mode);
             builder = builder.with_filter(*track_idx, scale_filter);
+        }
+    }
+
+    // Wire audio decoder+encoder for tracks that need transcoding
+    for (ac, &needs_transcode) in audio_track_configs.iter().zip(audio_needs_transcode.iter()) {
+        if !needs_transcode {
+            // Pass-through: no decoder/encoder needed, pipeline handles copy mode
+            continue;
+        }
+
+        // Create audio decoder based on input codec
+        match &ac.codec {
+            AudioCodec::Aac => {
+                let config_data = ac.config_data.as_ref().ok_or_else(|| {
+                    miette::miette!(
+                        "AAC audio track {} has no codec config (esds) — cannot decode",
+                        ac.track_index.0
+                    )
+                })?;
+                let decoder = AacDecoder::new(config_data)
+                    .into_diagnostic()
+                    .wrap_err("failed to create AAC decoder")?;
+                builder = builder.with_audio_decoder(ac.track_index, decoder);
+            }
+            AudioCodec::Opus => {
+                // Opus decode from WebM — not yet implemented, fail with clear error
+                return Err(miette::miette!(
+                    "Opus audio decoding is not yet implemented — \
+                     cannot transcode Opus audio from track {}",
+                    ac.track_index.0
+                ));
+            }
+            AudioCodec::Other(name) => {
+                return Err(miette::miette!(
+                    "unsupported audio codec '{}' in track {} — cannot transcode",
+                    name,
+                    ac.track_index.0
+                ));
+            }
+        }
+
+        // Create audio encoder based on target codec
+        let channel_layout = ac
+            .channel_layout
+            .unwrap_or(splica_core::media::ChannelLayout::Stereo);
+
+        match &target_audio_codec {
+            AudioCodec::Aac => {
+                let encoder = AacEncoderBuilder::new()
+                    .bitrate(128_000)
+                    .sample_rate(ac.sample_rate)
+                    .channel_layout(channel_layout)
+                    .track_index(ac.track_index)
+                    .build()
+                    .into_diagnostic()
+                    .wrap_err("failed to create AAC encoder")?;
+                builder = builder.with_audio_encoder(ac.track_index, encoder);
+            }
+            AudioCodec::Opus => {
+                let encoder = OpusEncoderBuilder::new()
+                    .bitrate(128_000)
+                    .sample_rate(ac.sample_rate)
+                    .channel_layout(channel_layout)
+                    .track_index(ac.track_index)
+                    .build()
+                    .into_diagnostic()
+                    .wrap_err("failed to create Opus encoder")?;
+                builder = builder.with_audio_encoder(ac.track_index, encoder);
+            }
+            AudioCodec::Other(name) => {
+                return Err(miette::miette!(
+                    "unsupported target audio codec '{}' — cannot encode",
+                    name,
+                ));
+            }
         }
     }
 
