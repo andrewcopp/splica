@@ -11,7 +11,6 @@ use crate::event::PipelineEvent;
 use crate::pipeline::Pipeline;
 
 /// How the pipeline should handle a track.
-#[allow(dead_code)] // Copy variant used once stream-copy mode is wired up
 pub(crate) enum TrackMode {
     /// Decode → filter → encode: full video transcode path.
     Transcode {
@@ -25,8 +24,6 @@ pub(crate) enum TrackMode {
         encoder: Box<dyn AudioEncoder>,
         filters: Vec<Box<dyn AudioFilter>>,
     },
-    /// Copy: pass compressed packets directly to the muxer.
-    Copy,
 }
 
 /// Builder for configuring and running a media processing pipeline.
@@ -77,8 +74,8 @@ pub(crate) enum TrackMode {
 ///     }
 /// });
 /// ```
-pub struct PipelineBuilder<F = fn(PipelineEvent)> {
-    pub(crate) on_event: Option<F>,
+pub struct PipelineBuilder {
+    pub(crate) on_event: Option<Box<dyn Fn(PipelineEvent)>>,
     pub(crate) demuxer: Option<Box<dyn Demuxer>>,
     pub(crate) muxer: Option<Box<dyn Muxer>>,
     pub(crate) decoders: HashMap<TrackIndex, Box<dyn Decoder>>,
@@ -88,6 +85,12 @@ pub struct PipelineBuilder<F = fn(PipelineEvent)> {
     pub(crate) audio_encoders: HashMap<TrackIndex, Box<dyn AudioEncoder>>,
     pub(crate) audio_filters: HashMap<TrackIndex, Vec<Box<dyn AudioFilter>>>,
     pub(crate) output_codecs: HashMap<TrackIndex, Codec>,
+}
+
+impl Default for PipelineBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl PipelineBuilder {
@@ -106,29 +109,11 @@ impl PipelineBuilder {
             output_codecs: HashMap::new(),
         }
     }
-}
 
-impl Default for PipelineBuilder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl<F: Fn(PipelineEvent)> PipelineBuilder<F> {
     /// Sets a callback that receives pipeline events for progress reporting.
-    pub fn with_event_handler<G: Fn(PipelineEvent)>(self, handler: G) -> PipelineBuilder<G> {
-        PipelineBuilder {
-            on_event: Some(handler),
-            demuxer: self.demuxer,
-            muxer: self.muxer,
-            decoders: self.decoders,
-            encoders: self.encoders,
-            filters: self.filters,
-            audio_decoders: self.audio_decoders,
-            audio_encoders: self.audio_encoders,
-            audio_filters: self.audio_filters,
-            output_codecs: self.output_codecs,
-        }
+    pub fn with_event_handler(mut self, handler: impl Fn(PipelineEvent) + 'static) -> Self {
+        self.on_event = Some(Box::new(handler));
+        self
     }
 
     /// Sets the demuxer (input source).
@@ -286,7 +271,7 @@ impl<F: Fn(PipelineEvent)> PipelineBuilder<F> {
     ///
     /// Calls [`validate()`](Self::validate) internally and returns the first
     /// error as a `PipelineError::Validation` if validation fails.
-    pub fn build(mut self) -> Result<Pipeline<F>, PipelineError> {
+    pub fn build(mut self) -> Result<Pipeline, PipelineError> {
         let errors = self.validate();
         if let Some(err) = errors.into_iter().next() {
             return Err(PipelineError::Validation(err));

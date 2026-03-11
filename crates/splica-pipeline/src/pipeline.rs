@@ -15,15 +15,15 @@ use crate::event::{PipelineEvent, PipelineEventKind};
 /// Created via [`PipelineBuilder::build()`](crate::PipelineBuilder::build).
 /// Call [`run()`](Pipeline::run) to process all packets from the demuxer
 /// through to the muxer.
-pub struct Pipeline<F = fn(PipelineEvent)> {
+pub struct Pipeline {
     pub(crate) demuxer: Box<dyn Demuxer>,
     pub(crate) muxer: Box<dyn Muxer>,
     pub(crate) track_modes: HashMap<TrackIndex, TrackMode>,
     pub(crate) output_codecs: HashMap<TrackIndex, Codec>,
-    pub(crate) on_event: Option<F>,
+    pub(crate) on_event: Option<Box<dyn Fn(PipelineEvent)>>,
 }
 
-fn emit_event<F: Fn(PipelineEvent)>(on_event: &Option<F>, kind: PipelineEventKind) {
+fn emit_event(on_event: &Option<Box<dyn Fn(PipelineEvent)>>, kind: PipelineEventKind) {
     if let Some(ref f) = on_event {
         f(PipelineEvent::new(kind));
     }
@@ -31,13 +31,13 @@ fn emit_event<F: Fn(PipelineEvent)>(on_event: &Option<F>, kind: PipelineEventKin
 
 /// Drains all available frames from a decoder, applies filters, encodes them,
 /// and writes resulting packets to the muxer.
-fn drain_decoder_to_muxer<F: Fn(PipelineEvent)>(
+fn drain_decoder_to_muxer(
     decoder: &mut dyn Decoder,
     encoder: &mut dyn Encoder,
     filters: &mut [Box<dyn VideoFilter>],
     muxer: &mut dyn Muxer,
     output_track: TrackIndex,
-    on_event: &Option<F>,
+    on_event: &Option<Box<dyn Fn(PipelineEvent)>>,
     counters: &mut PipelineCounters,
 ) -> Result<(), PipelineError> {
     while let Some(frame) = decoder.receive_frame()? {
@@ -72,11 +72,11 @@ fn drain_decoder_to_muxer<F: Fn(PipelineEvent)>(
 }
 
 /// Drains all available packets from an encoder and writes them to the muxer.
-fn drain_encoder_to_muxer<F: Fn(PipelineEvent)>(
+fn drain_encoder_to_muxer(
     encoder: &mut dyn Encoder,
     muxer: &mut dyn Muxer,
     output_track: TrackIndex,
-    on_event: &Option<F>,
+    on_event: &Option<Box<dyn Fn(PipelineEvent)>>,
     counters: &mut PipelineCounters,
 ) -> Result<(), PipelineError> {
     while let Some(mut encoded_packet) = encoder.receive_packet()? {
@@ -103,13 +103,13 @@ fn drain_encoder_to_muxer<F: Fn(PipelineEvent)>(
 
 /// Drains all available frames from an audio decoder, applies audio filters,
 /// encodes them, and writes resulting packets to the muxer.
-fn drain_audio_decoder_to_muxer<F: Fn(PipelineEvent)>(
+fn drain_audio_decoder_to_muxer(
     decoder: &mut dyn AudioDecoder,
     encoder: &mut dyn AudioEncoder,
     filters: &mut [Box<dyn AudioFilter>],
     muxer: &mut dyn Muxer,
     output_track: TrackIndex,
-    on_event: &Option<F>,
+    on_event: &Option<Box<dyn Fn(PipelineEvent)>>,
     counters: &mut PipelineCounters,
 ) -> Result<(), PipelineError> {
     while let Some(frame) = decoder.receive_frame()? {
@@ -134,11 +134,11 @@ fn drain_audio_decoder_to_muxer<F: Fn(PipelineEvent)>(
 }
 
 /// Drains all available packets from an audio encoder and writes them to the muxer.
-fn drain_audio_encoder_to_muxer<F: Fn(PipelineEvent)>(
+fn drain_audio_encoder_to_muxer(
     encoder: &mut dyn AudioEncoder,
     muxer: &mut dyn Muxer,
     output_track: TrackIndex,
-    on_event: &Option<F>,
+    on_event: &Option<Box<dyn Fn(PipelineEvent)>>,
     counters: &mut PipelineCounters,
 ) -> Result<(), PipelineError> {
     while let Some(mut encoded_packet) = encoder.receive_packet()? {
@@ -170,7 +170,7 @@ struct PipelineCounters {
     packets_written: u64,
 }
 
-impl<F: Fn(PipelineEvent)> Pipeline<F> {
+impl Pipeline {
     /// Runs the pipeline to completion.
     ///
     /// Processes all packets from the demuxer, routing each through the
@@ -254,7 +254,7 @@ impl<F: Fn(PipelineEvent)> Pipeline<F> {
                         &mut counters,
                     )?;
                 }
-                Some(TrackMode::Copy) | None => {
+                None => {
                     // Copy mode: pass packet directly to muxer
                     let mut out_packet = packet;
                     out_packet.track_index = output_track;
