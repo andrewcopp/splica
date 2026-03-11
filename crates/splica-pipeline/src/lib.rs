@@ -825,7 +825,7 @@ mod tests {
                 height: 1080,
                 pixel_format: Some(PixelFormat::Yuv420p),
                 color_space: None,
-                frame_rate: Some(FrameRate::new(30, 1)),
+                frame_rate: FrameRate::new(30, 1),
             }),
             audio: None,
         }
@@ -834,8 +834,8 @@ mod tests {
     fn make_packet(track: u32, frame_num: i64) -> Packet {
         Packet {
             track_index: TrackIndex(track),
-            pts: Timestamp::new(frame_num, 30),
-            dts: Timestamp::new(frame_num, 30),
+            pts: Timestamp::new(frame_num, 30).unwrap(),
+            dts: Timestamp::new(frame_num, 30).unwrap(),
             is_keyframe: frame_num == 0,
             data: Bytes::from(vec![0u8; 100]),
         }

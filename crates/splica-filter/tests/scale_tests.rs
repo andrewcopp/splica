@@ -48,7 +48,7 @@ fn make_yuv420_frame(width: u32, height: u32, y_val: u8) -> VideoFrame {
         height,
         PixelFormat::Yuv420p,
         ColorSpace::BT709,
-        Timestamp::new(0, 30),
+        Timestamp::new(0, 30).unwrap(),
         Bytes::from(buf),
         planes,
     )
@@ -88,7 +88,7 @@ fn test_that_scale_filter_preserves_timestamp() {
 
     let result = filter.process(frame).unwrap();
 
-    assert_eq!(result.pts, Timestamp::new(0, 30));
+    assert_eq!(result.pts, Timestamp::new(0, 30).unwrap());
 }
 
 #[test]
@@ -174,7 +174,7 @@ fn test_that_scale_filter_rejects_non_yuv420p() {
         height,
         PixelFormat::Rgba,
         ColorSpace::BT709,
-        Timestamp::new(0, 30),
+        Timestamp::new(0, 30).unwrap(),
         Bytes::from(buf),
         planes,
     )

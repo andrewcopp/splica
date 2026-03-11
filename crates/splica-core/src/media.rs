@@ -27,13 +27,15 @@ pub struct FrameRate {
 }
 
 impl FrameRate {
-    /// Creates a new frame rate. Panics if denominator is zero.
-    pub fn new(numerator: u32, denominator: u32) -> Self {
-        assert!(denominator > 0, "frame rate denominator must be non-zero");
-        Self {
+    /// Creates a new frame rate. Returns `None` if denominator is zero.
+    pub fn new(numerator: u32, denominator: u32) -> Option<Self> {
+        if denominator == 0 {
+            return None;
+        }
+        Some(Self {
             numerator,
             denominator,
-        }
+        })
     }
 
     /// Returns the frame rate as a floating-point value.
@@ -551,8 +553,8 @@ mod tests {
         // GIVEN
         let packet = Packet {
             track_index: TrackIndex(0),
-            pts: Timestamp::new(0, 30),
-            dts: Timestamp::new(0, 30),
+            pts: Timestamp::new(0, 30).unwrap(),
+            dts: Timestamp::new(0, 30).unwrap(),
             is_keyframe: true,
             data: Bytes::from_static(b"compressed data"),
         };
@@ -580,7 +582,7 @@ mod tests {
             1080,
             PixelFormat::Yuv420p,
             ColorSpace::BT709,
-            Timestamp::new(0, 30),
+            Timestamp::new(0, 30).unwrap(),
             Bytes::from(buf),
             vec![
                 PlaneLayout {
@@ -619,7 +621,7 @@ mod tests {
             240,
             PixelFormat::Yuv420p,
             ColorSpace::BT709,
-            Timestamp::new(90, 30),
+            Timestamp::new(90, 30).unwrap(),
             Bytes::new(),
             vec![],
         )
@@ -644,7 +646,7 @@ mod tests {
     #[test]
     fn test_that_frame_rate_represents_ntsc_exactly() {
         // GIVEN — 29.97fps NTSC as rational
-        let rate = FrameRate::new(30000, 1001);
+        let rate = FrameRate::new(30000, 1001).unwrap();
 
         // THEN — exact representation, no floating-point drift
         assert_eq!(rate.numerator, 30000);
@@ -656,7 +658,7 @@ mod tests {
     #[test]
     fn test_that_frame_rate_displays_integer_without_denominator() {
         // GIVEN — exact 30fps
-        let rate = FrameRate::new(30, 1);
+        let rate = FrameRate::new(30, 1).unwrap();
 
         // THEN
         assert_eq!(rate.to_string(), "30");
@@ -711,7 +713,7 @@ mod tests {
             2,
             PixelFormat::Yuv420p,
             ColorSpace::BT709,
-            Timestamp::new(0, 30),
+            Timestamp::new(0, 30).unwrap(),
             Bytes::from(buf),
             vec![
                 PlaneLayout {
@@ -754,7 +756,7 @@ mod tests {
             10,
             PixelFormat::Yuv420p,
             ColorSpace::BT709,
-            Timestamp::new(0, 30),
+            Timestamp::new(0, 30).unwrap(),
             buf,
             vec![PlaneLayout {
                 offset: 0,
@@ -782,7 +784,7 @@ mod tests {
             5,
             PixelFormat::Yuv420p,
             ColorSpace::BT709,
-            Timestamp::new(0, 30),
+            Timestamp::new(0, 30).unwrap(),
             buf,
             vec![PlaneLayout {
                 offset: 0,

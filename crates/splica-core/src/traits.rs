@@ -344,14 +344,14 @@ mod tests {
                 height: 1080,
                 pixel_format: Some(PixelFormat::Yuv420p),
                 color_space: Some(ColorSpace::BT709),
-                frame_rate: Some(FrameRate::new(30, 1)),
+                frame_rate: FrameRate::new(30, 1),
             }),
             audio: None,
         };
         let packet = Packet {
             track_index: TrackIndex(0),
-            pts: Timestamp::new(0, 30),
-            dts: Timestamp::new(0, 30),
+            pts: Timestamp::new(0, 30).unwrap(),
+            dts: Timestamp::new(0, 30).unwrap(),
             is_keyframe: true,
             data: Bytes::from_static(b"fake h264 data"),
         };
@@ -383,8 +383,8 @@ mod tests {
         let data = Cursor::new(vec![0u8; 100]);
         let packet = Packet {
             track_index: TrackIndex(0),
-            pts: Timestamp::new(0, 30),
-            dts: Timestamp::new(0, 30),
+            pts: Timestamp::new(0, 30).unwrap(),
+            dts: Timestamp::new(0, 30).unwrap(),
             is_keyframe: true,
             data: Bytes::from_static(b"data"),
         };
@@ -396,7 +396,7 @@ mod tests {
 
         // WHEN — seek back
         demuxer
-            .seek(Timestamp::new(0, 30), SeekMode::Keyframe)
+            .seek(Timestamp::new(0, 30).unwrap(), SeekMode::Keyframe)
             .unwrap();
 
         // THEN — can read again

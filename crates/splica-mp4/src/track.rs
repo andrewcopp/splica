@@ -56,7 +56,7 @@ impl Mp4Track {
         let duration = if self.timescale > 0 && self.duration > 0 {
             i64::try_from(self.duration)
                 .ok()
-                .map(|ticks| Timestamp::new(ticks, self.timescale))
+                .and_then(|ticks| Timestamp::new(ticks, self.timescale))
         } else {
             None
         };
@@ -157,7 +157,7 @@ impl Mp4Track {
 
         u32::try_from(num)
             .ok()
-            .and_then(|n| u32::try_from(den).ok().map(|d| FrameRate::new(n, d)))
+            .and_then(|n| u32::try_from(den).ok().and_then(|d| FrameRate::new(n, d)))
     }
 }
 

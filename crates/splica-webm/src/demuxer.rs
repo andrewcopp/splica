@@ -313,7 +313,12 @@ impl<R: Read + Seek> Demuxer for WebmDemuxer<R> {
                 // Convert nanosecond timestamp to our Timestamp type
                 // Use nanosecond timebase (1_000_000_000)
                 let timebase = 1_000_000_000u32;
-                let pts = Timestamp::new(buffered.pts_ns, timebase);
+                let pts = Timestamp::new(buffered.pts_ns, timebase).ok_or_else(|| {
+                    DemuxError::InvalidContainer {
+                        offset: 0,
+                        message: "nanosecond timebase is zero".to_string(),
+                    }
+                })?;
 
                 return Ok(Some(Packet {
                     track_index,

@@ -393,11 +393,20 @@ impl<R: Read + Seek> Demuxer for Mp4Demuxer<R> {
         self.bytes_read += sample.size as u64;
         self.packets_read += 1;
 
-        let dts = Timestamp::new(sample.dts, track.sample_table.timescale);
+        let dts = Timestamp::new(sample.dts, track.sample_table.timescale).ok_or_else(|| {
+            DemuxError::InvalidContainer {
+                offset: sample.offset,
+                message: format!("track timescale is zero (track {})", track_idx),
+            }
+        })?;
         let pts = Timestamp::new(
             sample.dts + sample.cts_offset as i64,
             track.sample_table.timescale,
-        );
+        )
+        .ok_or_else(|| DemuxError::InvalidContainer {
+            offset: sample.offset,
+            message: format!("track timescale is zero (track {})", track_idx),
+        })?;
 
         Ok(Some(Packet {
             track_index: TrackIndex(track_idx as u32),

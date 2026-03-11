@@ -402,7 +402,7 @@ mod tests {
             height,
             PixelFormat::Yuv420p,
             ColorSpace::BT709,
-            Timestamp::new(pts_ticks, 30000),
+            Timestamp::new(pts_ticks, 30000).unwrap(),
             Bytes::from(data),
             vec![
                 PlaneLayout {
@@ -493,7 +493,7 @@ mod tests {
             128,
             PixelFormat::Yuv422p,
             ColorSpace::BT709,
-            Timestamp::new(0, 30000),
+            Timestamp::new(0, 30000).unwrap(),
             Bytes::from(vec![0u8; y_size + uv_size * 2]),
             vec![
                 PlaneLayout {

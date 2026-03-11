@@ -213,8 +213,8 @@ fn test_that_h264_decoder_decodes_encoded_frames() {
     for (i, pkt_data) in mp4_packets.iter().enumerate() {
         let packet = Packet {
             track_index: TrackIndex(0),
-            pts: Timestamp::new(i as i64, 30),
-            dts: Timestamp::new(i as i64, 30),
+            pts: Timestamp::new(i as i64, 30).unwrap(),
+            dts: Timestamp::new(i as i64, 30).unwrap(),
             is_keyframe: i == 0,
             data: Bytes::from(pkt_data.clone()),
         };

@@ -350,7 +350,7 @@ mod tests {
             channel_layout: ChannelLayout::Stereo,
             sample_format: SampleFormat::F32,
             sample_count,
-            pts: Timestamp::new(0, 44100),
+            pts: Timestamp::new(0, 44100).unwrap(),
             data: vec![Bytes::from(data)],
         };
 

@@ -45,8 +45,8 @@ fn make_audio_track(index: u32) -> TrackInfo {
 fn make_packet(track: u32, frame_num: i64, is_keyframe: bool, data: &[u8]) -> Packet {
     Packet {
         track_index: TrackIndex(track),
-        pts: Timestamp::new(frame_num * 33, 1000), // ~30fps in ms timebase
-        dts: Timestamp::new(frame_num * 33, 1000),
+        pts: Timestamp::new(frame_num * 33, 1000).unwrap(), // ~30fps in ms timebase
+        dts: Timestamp::new(frame_num * 33, 1000).unwrap(),
         is_keyframe,
         data: bytes::Bytes::from(data.to_vec()),
     }

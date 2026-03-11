@@ -16,26 +16,21 @@ pub struct Timestamp {
 }
 
 impl Timestamp {
-    /// Creates a new timestamp.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `timebase` is zero.
-    pub fn new(ticks: i64, timebase: u32) -> Self {
-        assert!(timebase > 0, "timebase must be non-zero");
-        Self { ticks, timebase }
-    }
-
-    /// Creates a timestamp representing zero in the given timebase.
-    pub fn zero(timebase: u32) -> Self {
-        Self::new(0, timebase)
+    /// Creates a new timestamp. Returns `None` if `timebase` is zero.
+    pub fn new(ticks: i64, timebase: u32) -> Option<Self> {
+        if timebase == 0 {
+            return None;
+        }
+        Some(Self { ticks, timebase })
     }
 
     /// Creates a timestamp from seconds and a target timebase.
     ///
-    /// Returns `None` if the conversion would overflow.
+    /// Returns `None` if `timebase` is zero or the conversion would overflow.
     pub fn from_seconds(seconds: f64, timebase: u32) -> Option<Self> {
-        assert!(timebase > 0, "timebase must be non-zero");
+        if timebase == 0 {
+            return None;
+        }
         let ticks = seconds * f64::from(timebase);
         if ticks > i64::MAX as f64 || ticks < i64::MIN as f64 {
             return None;
@@ -186,7 +181,7 @@ mod tests {
     #[test]
     fn test_that_timestamp_converts_to_seconds() {
         // GIVEN
-        let ts = Timestamp::new(150, 30);
+        let ts = Timestamp::new(150, 30).unwrap();
 
         // WHEN
         let seconds = ts.as_seconds_f64();
@@ -198,7 +193,7 @@ mod tests {
     #[test]
     fn test_that_timestamp_rescales_between_timebases() {
         // GIVEN — 5 seconds at 30fps
-        let ts = Timestamp::new(150, 30);
+        let ts = Timestamp::new(150, 30).unwrap();
 
         // WHEN — rescale to 48kHz audio timebase
         let rescaled = ts.rescale(48000).unwrap();
@@ -211,10 +206,10 @@ mod tests {
     #[test]
     fn test_that_checked_add_returns_none_on_overflow() {
         // GIVEN
-        let ts = Timestamp::new(i64::MAX, 1);
+        let ts = Timestamp::new(i64::MAX, 1).unwrap();
 
         // WHEN
-        let result = ts.checked_add(Timestamp::new(1, 1));
+        let result = ts.checked_add(Timestamp::new(1, 1).unwrap());
 
         // THEN
         assert!(result.is_none());
@@ -223,8 +218,8 @@ mod tests {
     #[test]
     fn test_that_timestamps_compare_across_timebases() {
         // GIVEN — 5 seconds in two different timebases
-        let a = Timestamp::new(150, 30);
-        let b = Timestamp::new(240000, 48000);
+        let a = Timestamp::new(150, 30).unwrap();
+        let b = Timestamp::new(240000, 48000).unwrap();
 
         // THEN
         assert_eq!(a, b);
@@ -233,8 +228,8 @@ mod tests {
     #[test]
     fn test_that_timestamp_ordering_works() {
         // GIVEN
-        let earlier = Timestamp::new(100, 30);
-        let later = Timestamp::new(200, 30);
+        let earlier = Timestamp::new(100, 30).unwrap();
+        let later = Timestamp::new(200, 30).unwrap();
 
         // THEN
         assert!(earlier < later);
@@ -255,8 +250,8 @@ mod tests {
     #[test]
     fn test_that_checked_add_works_across_timebases() {
         // GIVEN
-        let a = Timestamp::new(30, 30); // 1 second
-        let b = Timestamp::new(48000, 48000); // 1 second
+        let a = Timestamp::new(30, 30).unwrap(); // 1 second
+        let b = Timestamp::new(48000, 48000).unwrap(); // 1 second
 
         // WHEN
         let result = a.checked_add(b).unwrap();
@@ -267,9 +262,8 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "timebase must be non-zero")]
-    fn test_that_zero_timebase_panics() {
-        let _ = Timestamp::new(0, 0);
+    fn test_that_zero_timebase_returns_none() {
+        assert!(Timestamp::new(0, 0).is_none());
     }
 
     #[test]
@@ -277,7 +271,7 @@ mod tests {
         // GIVEN — a large tick value at 90kHz (common MPEG-TS timebase)
         // representing ~28.5 hours of content (a very long stream)
         let ticks: i64 = 90_000 * 3600 * 28 + 90_000 * 1800; // 28.5 hours
-        let ts = Timestamp::new(ticks, 90_000);
+        let ts = Timestamp::new(ticks, 90_000).unwrap();
 
         // WHEN — rescale to 48kHz audio timebase
         let rescaled = ts.rescale(48_000);
@@ -297,7 +291,7 @@ mod tests {
         // GIVEN — values that would overflow i64 if multiplied directly
         // ticks * target_timebase would overflow i64 without i128
         let large_ticks: i64 = i64::MAX / 2;
-        let ts = Timestamp::new(large_ticks, 90_000);
+        let ts = Timestamp::new(large_ticks, 90_000).unwrap();
 
         // WHEN — rescale to a timebase that would cause i64 overflow
         let result = ts.rescale(48_000);

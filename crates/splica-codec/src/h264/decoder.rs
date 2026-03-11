@@ -282,7 +282,7 @@ impl Decoder for H264Decoder {
                         if let Some(yuv) = frames.first() {
                             // Use a zero timestamp for flushed frames — caller
                             // should use the last known PTS
-                            let pts = splica_core::Timestamp::new(0, 1);
+                            let pts = splica_core::Timestamp::new(0, 1).unwrap();
                             let frame = Self::yuv_to_video_frame(yuv, pts)?;
                             self.pending_frame = Some(frame);
                         } else {

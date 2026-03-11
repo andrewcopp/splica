@@ -66,7 +66,9 @@ impl SmpteTimecode {
         // ticks = frame_count * fps_den, timebase = fps_num
         // This gives exact rational representation.
         let ticks = frame_count as i64 * rate.denominator as i64;
-        Timestamp::new(ticks, rate.numerator)
+        // rate.numerator is guaranteed non-zero because FrameRate::new rejects zero denominator,
+        // and numerator comes from a valid FrameRate that produces meaningful frame counts.
+        Timestamp::new(ticks, rate.numerator).unwrap()
     }
 
     fn from_frame_count_nondrop(frame_count: u64, fps: u32) -> Self {
@@ -188,7 +190,7 @@ mod tests {
     // Helper: create a timestamp from a frame count at 29.97fps
     // timebase = 30000, ticks = frame_count * 1001
     fn ts_from_frames_2997(frame_count: u64) -> Timestamp {
-        Timestamp::new(frame_count as i64 * 1001, 30000)
+        Timestamp::new(frame_count as i64 * 1001, 30000).unwrap()
     }
 
     // -----------------------------------------------------------------------
@@ -247,7 +249,7 @@ mod tests {
     #[test]
     fn test_that_non_drop_frame_uses_colon_separator() {
         // GIVEN — 90 seconds at 24fps = frame 2160
-        let ts = Timestamp::new(2160, 24);
+        let ts = Timestamp::new(2160, 24).unwrap();
         let tc = SmpteTimecode::from_timestamp(ts, NDF_RATE, false);
 
         // THEN
@@ -282,7 +284,7 @@ mod tests {
         let frame_duration_secs = 1.0 / 24.0;
 
         for &frame_count in &[0u64, 23, 24, 1440, 86400] {
-            let original_ts = Timestamp::new(frame_count as i64, 24);
+            let original_ts = Timestamp::new(frame_count as i64, 24).unwrap();
             let tc = SmpteTimecode::from_timestamp(original_ts, NDF_RATE, false);
             let round_tripped = tc.to_timestamp(NDF_RATE);
 
@@ -301,7 +303,7 @@ mod tests {
     #[test]
     fn test_that_timestamp_fields_are_unchanged() {
         // GIVEN — basic timestamp operations still work
-        let ts = Timestamp::new(150, 30);
+        let ts = Timestamp::new(150, 30).unwrap();
 
         // THEN
         assert_eq!(ts.ticks(), 150);
