@@ -10,7 +10,7 @@ use wasm_bindgen::prelude::*;
 use splica_core::wasm_types::{
     audio_track_info_json, video_track_info_json, WasmVideoDecoderConfig, WasmVideoPacket,
 };
-use splica_core::{Demuxer, TrackKind};
+use splica_core::{Demuxer, SeekMode, Seekable, Timestamp, TrackKind};
 
 use crate::boxes::stsd::CodecConfig;
 use crate::codec_strings::{
@@ -177,6 +177,29 @@ impl WasmMp4Demuxer {
             ))),
             None => Err(JsValue::from_str("video track has no codec configuration")),
         }
+    }
+
+    /// Seeks to the given timestamp in microseconds (keyframe mode).
+    ///
+    /// After seeking, subsequent `readVideoPacket()` / `nextPacket()` calls
+    /// will return packets starting from the nearest keyframe at or before the
+    /// target. Returns the actual seek position in microseconds, or an error.
+    #[wasm_bindgen(js_name = "seekToTimestamp")]
+    pub fn seek_to_timestamp(&mut self, timestamp_us: f64) -> Result<f64, JsValue> {
+        let target = Timestamp::from_seconds(timestamp_us / 1_000_000.0, 1_000_000_000)
+            .ok_or_else(|| JsValue::from_str("invalid seek timestamp"))?;
+
+        self.inner
+            .seek(target, SeekMode::Keyframe)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+
+        let actual_us = self
+            .inner
+            .seek_position()
+            .map(|t| t.as_seconds_f64() * 1_000_000.0)
+            .unwrap_or(timestamp_us);
+
+        Ok(actual_us)
     }
 
     /// Reads the next video packet, skipping audio packets.
