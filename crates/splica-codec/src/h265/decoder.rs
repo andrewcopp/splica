@@ -3,13 +3,15 @@
 //! All `unsafe` code is contained within the `libde265` crate.
 //! This module uses only the safe Rust API provided by that crate.
 
+use std::any::Any;
+use std::collections::VecDeque;
+
 use bytes::Bytes;
 use splica_core::error::DecodeError;
 use splica_core::media::{
     ColorRange, ColorSpace, Frame, Packet, PixelFormat, PlaneLayout, VideoFrame,
 };
 use splica_core::Decoder;
-use std::any::Any;
 
 use crate::color::{map_color_primaries, map_matrix_coefficients, map_transfer_characteristics};
 use crate::error::CodecError;
@@ -38,8 +40,9 @@ pub struct H265Decoder {
     hvcc_config: HevcDecoderConfig,
     /// Whether VPS/SPS/PPS have been sent to the decoder.
     initialized: bool,
-    /// Buffered decoded frame (send/receive pattern: one frame per packet).
-    pending_frame: Option<VideoFrame>,
+    /// Buffered decoded frames from libde265 (B-frame reordering may produce
+    /// multiple frames per decode cycle).
+    pending_frames: VecDeque<VideoFrame>,
     /// Whether end-of-stream has been signaled.
     flushing: bool,
 }
@@ -62,7 +65,7 @@ impl H265Decoder {
             inner,
             hvcc_config,
             initialized: false,
-            pending_frame: None,
+            pending_frames: VecDeque::new(),
             flushing: false,
         })
     }
@@ -85,10 +88,40 @@ impl H265Decoder {
                 .map_err(|e| CodecError::DecoderError {
                     message: format!("failed to push VPS/SPS/PPS: {e}"),
                 })?;
-            // Decode the parameter sets — no frame will be produced
-            let _ = self.inner.decode();
+            // Decode all parameter set NALs (VPS + SPS + PPS) — no frames produced
+            self.decode_all_pending()?;
         }
         self.initialized = true;
+        Ok(())
+    }
+
+    /// Calls `decode()` repeatedly to process all buffered NAL units, then
+    /// collects all available decoded pictures.
+    fn decode_all_pending(&mut self) -> Result<(), CodecError> {
+        // libde265's decode() processes one NAL unit per call. The Rust wrapper
+        // maps WaitingForInputData to Ok(()), so we loop a bounded number of
+        // times to drain the internal buffer.
+        for _ in 0..128 {
+            match self.inner.decode() {
+                Ok(()) => {}
+                Err(libde265::Error::WaitingForInputData) => break,
+                Err(e) => {
+                    return Err(CodecError::DecoderError {
+                        message: format!("decode error: {e}"),
+                    });
+                }
+            }
+        }
+
+        // Collect all available decoded pictures
+        while let Some(image) = self.inner.get_next_picture() {
+            let pts_us = image.get_image_pts();
+            let pts = splica_core::Timestamp::new(pts_us, 1_000_000)
+                .unwrap_or_else(|| splica_core::Timestamp::new(0, 1).unwrap());
+            let frame = Self::image_to_video_frame(&image, pts)?;
+            self.pending_frames.push_back(frame);
+        }
+
         Ok(())
     }
 
@@ -196,51 +229,13 @@ impl Decoder for H265Decoder {
                     }
                 })?;
 
-                // Decode available data
-                match self.inner.decode() {
-                    Ok(()) => {}
-                    Err(libde265::Error::WaitingForInputData) => {}
-                    Err(e) => {
-                        return Err(CodecError::DecoderError {
-                            message: format!("decode error: {e}"),
-                        }
-                        .into());
-                    }
-                }
-
-                // Try to get a decoded picture
-                if let Some(image) = self.inner.get_next_picture() {
-                    let frame = Self::image_to_video_frame(&image, pkt.pts)?;
-                    self.pending_frame = Some(frame);
-                } else {
-                    self.pending_frame = None;
-                }
+                self.decode_all_pending()?;
             }
             None => {
-                // End of stream — flush
+                // End of stream — flush all remaining frames
                 self.flushing = true;
                 let _ = self.inner.flush_data();
-                match self.inner.decode() {
-                    Ok(()) => {}
-                    Err(libde265::Error::WaitingForInputData) => {}
-                    Err(e) => {
-                        return Err(CodecError::DecoderError {
-                            message: format!("flush decode error: {e}"),
-                        }
-                        .into());
-                    }
-                }
-
-                if let Some(image) = self.inner.get_next_picture() {
-                    // Recover PTS from libde265 (stored as microseconds via push_data)
-                    let pts_us = image.get_image_pts();
-                    let pts = splica_core::Timestamp::new(pts_us, 1_000_000)
-                        .unwrap_or_else(|| splica_core::Timestamp::new(0, 1).unwrap());
-                    let frame = Self::image_to_video_frame(&image, pts)?;
-                    self.pending_frame = Some(frame);
-                } else {
-                    self.pending_frame = None;
-                }
+                self.decode_all_pending()?;
             }
         }
 
@@ -248,7 +243,7 @@ impl Decoder for H265Decoder {
     }
 
     fn receive_frame(&mut self) -> Result<Option<Frame>, DecodeError> {
-        Ok(self.pending_frame.take().map(Frame::Video))
+        Ok(self.pending_frames.pop_front().map(Frame::Video))
     }
 
     fn as_any(&self) -> &dyn Any {
