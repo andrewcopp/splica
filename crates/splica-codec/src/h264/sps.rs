@@ -4,9 +4,9 @@
 //! Does not attempt to parse the full SPS — only enough to reach
 //! `vui_parameters_present_flag` and the color description fields.
 
-use splica_core::media::{
-    ColorPrimaries, ColorRange, ColorSpace, MatrixCoefficients, TransferCharacteristics,
-};
+use splica_core::media::{ColorRange, ColorSpace};
+
+use crate::color::{map_color_primaries, map_matrix_coefficients, map_transfer_characteristics};
 
 /// Color parameters extracted from the SPS VUI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -176,34 +176,6 @@ pub(crate) fn parse_sps_color_info(sps_nalu: &[u8]) -> Option<SpsColorInfo> {
     })
 }
 
-fn map_color_primaries(val: u8) -> Option<ColorPrimaries> {
-    match val {
-        1 => Some(ColorPrimaries::Bt709),
-        9 => Some(ColorPrimaries::Bt2020),
-        12 => Some(ColorPrimaries::Smpte432),
-        _ => None,
-    }
-}
-
-fn map_transfer_characteristics(val: u8) -> Option<TransferCharacteristics> {
-    match val {
-        1 => Some(TransferCharacteristics::Bt709),
-        16 => Some(TransferCharacteristics::Smpte2084),
-        18 => Some(TransferCharacteristics::HybridLogGamma),
-        _ => None,
-    }
-}
-
-fn map_matrix_coefficients(val: u8) -> Option<MatrixCoefficients> {
-    match val {
-        0 => Some(MatrixCoefficients::Identity),
-        1 => Some(MatrixCoefficients::Bt709),
-        9 => Some(MatrixCoefficients::Bt2020NonConstant),
-        10 => Some(MatrixCoefficients::Bt2020Constant),
-        _ => None,
-    }
-}
-
 fn skip_scaling_list(reader: &mut BitReader<'_>, size: u32) -> Option<()> {
     let mut last_scale = 8i32;
     let mut next_scale = 8i32;
@@ -289,6 +261,9 @@ impl<'a> BitReader<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use splica_core::media::{
+        ColorPrimaries, ColorRange, MatrixCoefficients, TransferCharacteristics,
+    };
 
     #[test]
     fn test_that_bt709_sps_parses_color_info() {

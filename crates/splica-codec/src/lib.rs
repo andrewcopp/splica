@@ -42,6 +42,7 @@
 //! should compile to <100KB wasm.
 
 pub mod aac;
+pub(crate) mod color;
 pub mod error;
 pub mod h264;
 pub mod opus;
