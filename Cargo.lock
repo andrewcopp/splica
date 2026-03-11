@@ -1490,9 +1490,11 @@ name = "splica-mkv"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "js-sys",
  "splica-core",
  "splica-webm",
  "thiserror 2.0.18",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -1519,6 +1521,7 @@ name = "splica-wasm"
 version = "0.1.0"
 dependencies = [
  "splica-core",
+ "splica-mkv",
  "splica-mp4",
  "splica-webm",
  "wasm-bindgen",

@@ -12,6 +12,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 splica-core = { workspace = true, features = ["serde", "wasm"] }
+splica-mkv = { workspace = true, features = ["wasm"] }
 splica-mp4 = { workspace = true, features = ["wasm"] }
 splica-webm = { workspace = true, features = ["wasm"] }
 wasm-bindgen = "0.2"

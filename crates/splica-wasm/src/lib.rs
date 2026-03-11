@@ -31,5 +31,6 @@
 pub use splica_core::wasm_types::{
     WasmAudioDecoderConfig, WasmAudioPacket, WasmVideoDecoderConfig, WasmVideoPacket,
 };
+pub use splica_mkv::wasm::WasmMkvDemuxer;
 pub use splica_mp4::wasm::WasmMp4Demuxer;
 pub use splica_webm::wasm::WasmWebmDemuxer;
