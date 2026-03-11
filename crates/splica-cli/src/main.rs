@@ -7,7 +7,7 @@ use miette::{Context, IntoDiagnostic, Result};
 use serde::Serialize;
 
 use splica_codec::{
-    AacDecoder, AacEncoderBuilder, H264Decoder, H264EncoderBuilder, OpusEncoderBuilder,
+    AacDecoder, AacEncoderBuilder, H264Decoder, H264EncoderBuilder, OpusDecoder, OpusEncoderBuilder,
 };
 use splica_core::{
     AudioCodec, Codec, DecodeError, DemuxError, Demuxer, EncodeError, ErrorKind, FilterError,
@@ -1460,12 +1460,13 @@ fn process_inner(args: &ProcessArgs<'_>, json_mode: bool) -> Result<TranscodeOut
                 builder = builder.with_audio_decoder(ac.track_index, decoder);
             }
             AudioCodec::Opus => {
-                // Opus decode from WebM — not yet implemented, fail with clear error
-                return Err(miette::miette!(
-                    "Opus audio decoding is not yet implemented — \
-                     cannot transcode Opus audio from track {}",
-                    ac.track_index.0
-                ));
+                let channel_layout = ac
+                    .channel_layout
+                    .unwrap_or(splica_core::media::ChannelLayout::Stereo);
+                let decoder = OpusDecoder::new(ac.sample_rate, channel_layout)
+                    .into_diagnostic()
+                    .wrap_err("failed to create Opus decoder")?;
+                builder = builder.with_audio_decoder(ac.track_index, decoder);
             }
             AudioCodec::Other(name) => {
                 return Err(miette::miette!(

@@ -61,4 +61,7 @@ pub use aac::{AacDecoder, AacDecoderConfig};
 pub use aac::{AacEncoder, AacEncoderBuilder, AacEncoderConfig};
 
 #[cfg(feature = "codec-opus")]
+pub use opus::{OpusDecoder, OpusDecoderConfig};
+
+#[cfg(feature = "codec-opus")]
 pub use opus::{OpusEncoder, OpusEncoderBuilder, OpusEncoderConfig};
