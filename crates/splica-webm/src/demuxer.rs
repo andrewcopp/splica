@@ -735,6 +735,8 @@ fn build_track_info(index: usize, track: &WebmTrack) -> Result<TrackInfo, WebmEr
                 elements::CODEC_ID_VP8 => VideoCodec::Other("VP8".to_string()),
                 elements::CODEC_ID_VP9 => VideoCodec::Other("VP9".to_string()),
                 elements::CODEC_ID_AV1 => VideoCodec::Av1,
+                elements::CODEC_ID_H264 => VideoCodec::H264,
+                elements::CODEC_ID_H265 => VideoCodec::H265,
                 other => {
                     return Err(WebmError::UnsupportedCodec {
                         codec_id: other.to_string(),
@@ -747,6 +749,7 @@ fn build_track_info(index: usize, track: &WebmTrack) -> Result<TrackInfo, WebmEr
             let audio_codec = match track.codec_id.as_str() {
                 elements::CODEC_ID_VORBIS => AudioCodec::Other("Vorbis".to_string()),
                 elements::CODEC_ID_OPUS => AudioCodec::Opus,
+                elements::CODEC_ID_AAC => AudioCodec::Aac,
                 other => {
                     return Err(WebmError::UnsupportedCodec {
                         codec_id: other.to_string(),

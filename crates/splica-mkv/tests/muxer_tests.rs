@@ -248,3 +248,71 @@ fn test_that_mkv_muxer_rejects_unsupported_codec() {
     // THEN
     assert!(result.is_err());
 }
+
+#[test]
+fn test_that_mkv_roundtrips_h264_codec_id() {
+    // GIVEN — MKV with H.264 video (uses V_MPEG4/ISO/AVC codec ID)
+    let mut output = Cursor::new(Vec::new());
+    {
+        let mut muxer = MkvMuxer::new(&mut output);
+        let track = TrackInfo {
+            index: TrackIndex(0),
+            kind: TrackKind::Video,
+            codec: Codec::Video(VideoCodec::H264),
+            duration: None,
+            video: Some(VideoTrackInfo {
+                width: 1920,
+                height: 1080,
+                pixel_format: None,
+                color_space: None,
+                frame_rate: None,
+            }),
+            audio: None,
+        };
+        muxer.add_track(&track).unwrap();
+        muxer
+            .write_packet(&make_packet(0, 0, true, &[0x01]))
+            .unwrap();
+        muxer.finalize().unwrap();
+    }
+
+    // WHEN — demux with WebmDemuxer (which now handles MKV codec IDs)
+    let data = output.into_inner();
+    let demuxer = WebmDemuxer::open(Cursor::new(data)).unwrap();
+
+    // THEN — codec should round-trip as H.264
+    assert_eq!(demuxer.tracks()[0].codec, Codec::Video(VideoCodec::H264));
+}
+
+#[test]
+fn test_that_mkv_roundtrips_aac_codec_id() {
+    // GIVEN — MKV with AAC audio (uses A_AAC codec ID)
+    let mut output = Cursor::new(Vec::new());
+    {
+        let mut muxer = MkvMuxer::new(&mut output);
+        let track = TrackInfo {
+            index: TrackIndex(0),
+            kind: TrackKind::Audio,
+            codec: Codec::Audio(AudioCodec::Aac),
+            duration: None,
+            video: None,
+            audio: Some(AudioTrackInfo {
+                sample_rate: 44100,
+                channel_layout: None,
+                sample_format: None,
+            }),
+        };
+        muxer.add_track(&track).unwrap();
+        muxer
+            .write_packet(&make_packet(0, 0, true, &[0x01]))
+            .unwrap();
+        muxer.finalize().unwrap();
+    }
+
+    // WHEN
+    let data = output.into_inner();
+    let demuxer = WebmDemuxer::open(Cursor::new(data)).unwrap();
+
+    // THEN — codec should round-trip as AAC
+    assert_eq!(demuxer.tracks()[0].codec, Codec::Audio(AudioCodec::Aac));
+}

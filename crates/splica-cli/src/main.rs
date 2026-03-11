@@ -510,7 +510,7 @@ fn detect_format(file: &mut (impl Read + Seek)) -> Result<DetectedFormat> {
         ));
     }
 
-    // WebM/Matroska: EBML header starts with 0x1A 0x45 0xDF 0xA3
+    // WebM/MKV (Matroska): EBML header starts with 0x1A 0x45 0xDF 0xA3
     if magic[0] == 0x1A && magic[1] == 0x45 && magic[2] == 0xDF && magic[3] == 0xA3 {
         return Ok(DetectedFormat::WebM);
     }
@@ -521,7 +521,7 @@ fn detect_format(file: &mut (impl Read + Seek)) -> Result<DetectedFormat> {
     }
 
     Err(miette::miette!(
-        "unsupported container format — splica supports MP4 and WebM"
+        "unsupported container format — splica supports MP4, WebM, and MKV"
     ))
 }
 
