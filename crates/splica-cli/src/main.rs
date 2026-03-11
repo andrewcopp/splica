@@ -236,7 +236,7 @@ struct ErrorResult {
 fn classify_error(error: &miette::Report) -> (&'static str, i32) {
     let msg = format!("{error:?}");
 
-    // I/O errors (file not found, permission denied, etc.) — bad input
+    // I/O and input validation errors — bad input
     if msg.contains("could not open file")
         || msg.contains("could not create output file")
         || msg.contains("unsupported output format")
@@ -246,6 +246,10 @@ fn classify_error(error: &miette::Report) -> (&'static str, i32) {
         || msg.contains("invalid resize")
         || msg.contains("invalid bitrate")
         || msg.contains("invalid time")
+        || msg.contains("failed to parse MP4 container")
+        || msg.contains("failed to parse WebM container")
+        || msg.contains("file too small")
+        || msg.contains("could not read file header")
     {
         return ("bad_input", exit_code::BAD_INPUT);
     }
@@ -554,6 +558,27 @@ struct ProbeTrack {
 }
 
 fn probe(file: &Path, format: &OutputFormat) -> Result<()> {
+    let json_mode = matches!(format, OutputFormat::Json);
+
+    let result = probe_inner(file, format);
+
+    if json_mode {
+        if let Err(e) = result {
+            let (error_kind, code) = classify_error(&e);
+            let error_json = ErrorResult {
+                status: "error".to_string(),
+                error_kind: error_kind.to_string(),
+                message: format!("{e}"),
+            };
+            println!("{}", serde_json::to_string_pretty(&error_json).unwrap());
+            std::process::exit(code);
+        }
+    }
+
+    result
+}
+
+fn probe_inner(file: &Path, format: &OutputFormat) -> Result<()> {
     let demuxer = open_demuxer(file)?;
 
     let tracks: Vec<ProbeTrack> = demuxer
