@@ -252,6 +252,13 @@ impl Muxer for Box<dyn Muxer> {
 ///
 /// Filters operate on concrete `VideoFrame` values — they never see the
 /// `Frame` enum. Pipeline-level dispatch is handled by the pipeline crate.
+///
+/// # Color space contract
+///
+/// Implementations **must** preserve `VideoFrame::color_space` from input to
+/// output unless the filter explicitly performs a color space conversion.
+/// Dropping or overwriting color space metadata silently produces incorrect
+/// encoder VUI parameters, which is a correctness bug.
 pub trait VideoFilter {
     /// Processes a single video frame.
     fn process(&mut self, frame: VideoFrame) -> Result<VideoFrame, FilterError>;
