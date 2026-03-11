@@ -128,3 +128,23 @@ fn extract_audio_inner(input: &Path, output: &Path, format: &OutputFormat) -> Re
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_that_extract_audio_result_serializes_type_complete() {
+        let result = ExtractAudioResult {
+            event_type: "complete",
+            input: "input.mp4".to_string(),
+            output: "output.mp4".to_string(),
+            audio_tracks: 1,
+            packets_written: 42,
+        };
+
+        let json: serde_json::Value = serde_json::to_value(&result).unwrap();
+
+        assert_eq!(json["type"], "complete");
+    }
+}

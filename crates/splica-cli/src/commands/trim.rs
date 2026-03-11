@@ -14,6 +14,8 @@ use super::{
 
 #[derive(Serialize)]
 struct TrimResult {
+    #[serde(rename = "type")]
+    event_type: &'static str,
     input: String,
     output: String,
     packets_written: u64,
@@ -148,6 +150,7 @@ fn trim_inner(
     match format {
         OutputFormat::Json => {
             let result = TrimResult {
+                event_type: "complete",
                 input: input.display().to_string(),
                 output: output.display().to_string(),
                 packets_written: packet_count,
@@ -192,4 +195,26 @@ fn trim_inner(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_that_trim_result_serializes_type_complete() {
+        let result = TrimResult {
+            event_type: "complete",
+            input: "input.mp4".to_string(),
+            output: "output.mp4".to_string(),
+            packets_written: 10,
+            packets_skipped: 5,
+            actual_start_seconds: Some(0.1),
+            actual_end_seconds: Some(1.0),
+        };
+
+        let json: serde_json::Value = serde_json::to_value(&result).unwrap();
+
+        assert_eq!(json["type"], "complete");
+    }
 }

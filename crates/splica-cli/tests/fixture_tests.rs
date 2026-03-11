@@ -504,3 +504,86 @@ fn test_that_process_to_webm_produces_av1_output() {
 
     let _ = std::fs::remove_file("/tmp/splica_test_av1_encode.webm");
 }
+
+// ---------------------------------------------------------------------------
+// Extract audio JSON type discriminator (SPL-116)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_that_extract_audio_json_has_type_discriminator() {
+    // GIVEN — fixture has no audio tracks, so extract-audio will produce a JSON error.
+    // This verifies the error path includes the "type" discriminator.
+    let output_path = "/tmp/splica_test_extract_audio_type.mp4";
+
+    // WHEN — extract-audio with --format json on a video-only file
+    let output = splica_binary()
+        .args([
+            "extract-audio",
+            "-i",
+            &fixture_path("bigbuckbunny_h264.mp4"),
+            "-o",
+            output_path,
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    // THEN — should fail with structured JSON error including "type"
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("expected valid JSON error, got error {e}: {stdout}"));
+
+    assert_eq!(json["type"], "error");
+
+    // Cleanup
+    let _ = std::fs::remove_file(output_path);
+}
+
+// ---------------------------------------------------------------------------
+// Probe JSON contract (SPL-116)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_that_probe_json_reports_container_and_duration() {
+    // GIVEN — a known fixture
+
+    // WHEN — probe with --format json
+    let output = splica_binary()
+        .args([
+            "probe",
+            "--format",
+            "json",
+            &fixture_path("bigbuckbunny_h264.mp4"),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "probe --format json should succeed. stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // THEN — JSON has container, duration_seconds > 0, size_bytes > 0
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("expected valid JSON, got error {e}: {stdout}"));
+
+    assert!(
+        json["container"].as_str().is_some(),
+        "expected container field, got: {}",
+        json["container"]
+    );
+    assert!(
+        json["duration_seconds"].as_f64().unwrap_or(0.0) > 0.0,
+        "expected duration_seconds > 0, got: {}",
+        json["duration_seconds"]
+    );
+    assert!(
+        json["size_bytes"].as_u64().unwrap_or(0) > 0,
+        "expected size_bytes > 0, got: {}",
+        json["size_bytes"]
+    );
+}

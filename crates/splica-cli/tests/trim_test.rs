@@ -453,6 +453,51 @@ fn test_that_trim_json_output_includes_packet_counts() {
 }
 
 #[test]
+fn test_that_trim_json_has_type_discriminator() {
+    // GIVEN
+    let dir = std::env::temp_dir().join("splica_test_trim");
+    std::fs::create_dir_all(&dir).unwrap();
+    let input_path = dir.join("trim_type_input.mp4");
+    let output_path = dir.join("trim_type_output.mp4");
+
+    let mp4_data = build_muxed_multi_sample_mp4();
+    std::fs::write(&input_path, &mp4_data).unwrap();
+
+    // WHEN — trim with --format json
+    let output = splica_binary()
+        .args([
+            "trim",
+            "-i",
+            input_path.to_str().unwrap(),
+            "-o",
+            output_path.to_str().unwrap(),
+            "--start",
+            "0.1",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "trim --format json should succeed. stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // THEN — JSON output has "type": "complete"
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("expected valid JSON, got error {e}: {stdout}"));
+
+    assert_eq!(json["type"], "complete");
+
+    // Cleanup
+    let _ = std::fs::remove_file(&input_path);
+    let _ = std::fs::remove_file(&output_path);
+}
+
+#[test]
 fn test_that_trim_json_error_reports_bad_input() {
     // GIVEN — a corrupt file
     let dir = std::env::temp_dir().join("splica_test_trim");
