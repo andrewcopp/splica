@@ -552,6 +552,7 @@ struct ProbeTrack {
     height: Option<u32>,
     frame_rate: Option<String>,
     pixel_format: Option<String>,
+    color_space: Option<String>,
     sample_rate: Option<u32>,
     channels: Option<u32>,
     channel_layout: Option<String>,
@@ -607,6 +608,10 @@ fn probe_inner(file: &Path, format: &OutputFormat) -> Result<()> {
                     .video
                     .as_ref()
                     .and_then(|v| v.pixel_format.map(|pf| format!("{pf:?}"))),
+                color_space: t
+                    .video
+                    .as_ref()
+                    .and_then(|v| v.color_space.map(|cs| format_color_space(&cs))),
                 sample_rate: t.audio.as_ref().map(|a| a.sample_rate),
                 channels: t
                     .audio
@@ -645,6 +650,9 @@ fn probe_inner(file: &Path, format: &OutputFormat) -> Result<()> {
                 if let Some(ref pf) = track.pixel_format {
                     println!("    Pixel format: {pf}");
                 }
+                if let Some(ref cs) = track.color_space {
+                    println!("    Color space: {cs}");
+                }
                 if let Some(sr) = track.sample_rate {
                     print!("    Sample rate: {sr} Hz");
                     if let Some(ch) = track.channels {
@@ -665,6 +673,25 @@ fn probe_inner(file: &Path, format: &OutputFormat) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn format_color_space(cs: &splica_core::ColorSpace) -> String {
+    use splica_core::media::{ColorPrimaries, ColorRange, TransferCharacteristics};
+
+    let name = match (cs.primaries, cs.transfer) {
+        (ColorPrimaries::Bt709, TransferCharacteristics::Bt709) => "bt709",
+        (ColorPrimaries::Bt2020, TransferCharacteristics::Smpte2084) => "bt2020-pq",
+        (ColorPrimaries::Bt2020, TransferCharacteristics::HybridLogGamma) => "bt2020-hlg",
+        (ColorPrimaries::Bt2020, _) => "bt2020",
+        _ => "unknown",
+    };
+
+    let range = match cs.range {
+        ColorRange::Full => "full",
+        ColorRange::Limited => "limited",
+    };
+
+    format!("{name}/{range}")
 }
 
 fn format_codec(codec: &splica_core::Codec) -> String {
@@ -1081,7 +1108,7 @@ struct AudioCodecConfig {
 
 type DemuxerWithConfigs = (
     Box<dyn Demuxer>,
-    Vec<(TrackIndex, Vec<u8>)>,
+    Vec<(TrackIndex, Vec<u8>, Option<splica_core::ColorSpace>)>,
     Vec<AudioCodecConfig>,
 );
 
@@ -1128,9 +1155,11 @@ fn process_inner(args: &ProcessArgs<'_>, json_mode: bool) -> Result<TranscodeOut
             for track in &tracks {
                 if track.kind == TrackKind::Video {
                     if let Codec::Video(VideoCodec::H264) = &track.codec {
-                        if let Some(CodecConfig::Avc1 { avcc, .. }) = mp4.codec_config(track.index)
+                        if let Some(CodecConfig::Avc1 {
+                            avcc, color_space, ..
+                        }) = mp4.codec_config(track.index)
                         {
-                            video_configs.push((track.index, avcc.to_vec()));
+                            video_configs.push((track.index, avcc.to_vec(), *color_space));
                         }
                     }
                 }
@@ -1295,15 +1324,21 @@ fn process_inner(args: &ProcessArgs<'_>, json_mode: bool) -> Result<TranscodeOut
         .with_demuxer(demuxer)
         .with_muxer(muxer);
 
-    for (track_idx, avcc_data) in &video_track_configs {
+    for (track_idx, avcc_data, color_space) in &video_track_configs {
         let decoder = H264Decoder::new(avcc_data)
             .into_diagnostic()
             .wrap_err("failed to create H.264 decoder")?;
 
-        let encoder = H264EncoderBuilder::new()
+        let mut enc_builder = H264EncoderBuilder::new()
             .bitrate(bitrate_bps)
             .max_frame_rate(frame_rate_hint)
-            .track_index(*track_idx)
+            .track_index(*track_idx);
+
+        if let Some(cs) = color_space {
+            enc_builder = enc_builder.color_space(*cs);
+        }
+
+        let encoder = enc_builder
             .build()
             .into_diagnostic()
             .wrap_err("failed to create H.264 encoder")?;

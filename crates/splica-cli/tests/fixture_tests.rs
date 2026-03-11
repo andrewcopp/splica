@@ -139,6 +139,35 @@ fn test_that_probe_reports_correct_vp9_resolution() {
 }
 
 // ---------------------------------------------------------------------------
+// Color space
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_that_probe_json_reports_null_color_space_for_bbb_h264() {
+    // BBB H.264 fixture has no colr box and no SPS VUI color description,
+    // so color_space should be null.
+    let output = splica_binary()
+        .args([
+            "probe",
+            "--format",
+            "json",
+            &fixture_path("bigbuckbunny_h264.mp4"),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let video_track = &json["tracks"][0];
+    assert!(
+        video_track["color_space"].is_null(),
+        "expected null color_space for BBB H.264 (no colr box, no VUI color), got: {}",
+        video_track["color_space"]
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Error handling
 // ---------------------------------------------------------------------------
 

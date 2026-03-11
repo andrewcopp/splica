@@ -3,7 +3,9 @@
 //! These functions produce raw byte vectors for ISO BMFF boxes that are
 //! structurally identical between regular and fragmented MP4 files.
 
-use splica_core::MuxError;
+use splica_core::{
+    ColorPrimaries, ColorRange, ColorSpace, MatrixCoefficients, MuxError, TransferCharacteristics,
+};
 
 use crate::boxes::stsd::CodecConfig;
 
@@ -129,6 +131,7 @@ pub(crate) fn build_visual_sample_entry(
     height: u16,
     config_fourcc: &[u8; 4],
     config_data: &[u8],
+    color_space: Option<&ColorSpace>,
 ) -> Vec<u8> {
     let mut entry = Vec::new();
     entry.extend_from_slice(&[0u8; 6]); // reserved
@@ -149,7 +152,45 @@ pub(crate) fn build_visual_sample_entry(
         entry.extend_from_slice(&config_box);
     }
 
+    if let Some(cs) = color_space {
+        let colr = build_colr_nclx(cs);
+        entry.extend_from_slice(&colr);
+    }
+
     make_box(fourcc, &entry)
+}
+
+/// Builds a colr box with nclx (ISO 23001-8) color type.
+fn build_colr_nclx(cs: &ColorSpace) -> Vec<u8> {
+    let primaries: u16 = match cs.primaries {
+        ColorPrimaries::Bt709 => 1,
+        ColorPrimaries::Bt2020 => 9,
+        ColorPrimaries::Smpte432 => 12,
+    };
+    let transfer: u16 = match cs.transfer {
+        TransferCharacteristics::Bt709 => 1,
+        TransferCharacteristics::Smpte2084 => 16,
+        TransferCharacteristics::HybridLogGamma => 18,
+    };
+    let matrix: u16 = match cs.matrix {
+        MatrixCoefficients::Identity => 0,
+        MatrixCoefficients::Bt709 => 1,
+        MatrixCoefficients::Bt2020NonConstant => 9,
+        MatrixCoefficients::Bt2020Constant => 10,
+    };
+    let full_range: u8 = match cs.range {
+        ColorRange::Full => 0x80,
+        ColorRange::Limited => 0x00,
+    };
+
+    let mut body = Vec::with_capacity(11);
+    body.extend_from_slice(b"nclx");
+    body.extend_from_slice(&primaries.to_be_bytes());
+    body.extend_from_slice(&transfer.to_be_bytes());
+    body.extend_from_slice(&matrix.to_be_bytes());
+    body.push(full_range);
+
+    make_box(b"colr", &body)
 }
 
 /// Builds an audio sample entry box (mp4a).
@@ -187,24 +228,48 @@ pub(crate) fn build_stsd(config: &CodecConfig) -> Result<Vec<u8>, MuxError> {
             width,
             height,
             avcc,
+            color_space,
         } => {
-            let entry = build_visual_sample_entry(b"avc1", *width, *height, b"avcC", avcc);
+            let entry = build_visual_sample_entry(
+                b"avc1",
+                *width,
+                *height,
+                b"avcC",
+                avcc,
+                color_space.as_ref(),
+            );
             body.extend_from_slice(&entry);
         }
         CodecConfig::Hev1 {
             width,
             height,
             hvcc,
+            color_space,
         } => {
-            let entry = build_visual_sample_entry(b"hev1", *width, *height, b"hvcC", hvcc);
+            let entry = build_visual_sample_entry(
+                b"hev1",
+                *width,
+                *height,
+                b"hvcC",
+                hvcc,
+                color_space.as_ref(),
+            );
             body.extend_from_slice(&entry);
         }
         CodecConfig::Av1 {
             width,
             height,
             av1c,
+            color_space,
         } => {
-            let entry = build_visual_sample_entry(b"av01", *width, *height, b"av1C", av1c);
+            let entry = build_visual_sample_entry(
+                b"av01",
+                *width,
+                *height,
+                b"av1C",
+                av1c,
+                color_space.as_ref(),
+            );
             body.extend_from_slice(&entry);
         }
         CodecConfig::Mp4a {
@@ -229,4 +294,111 @@ pub(crate) fn build_stsd(config: &CodecConfig) -> Result<Vec<u8>, MuxError> {
 /// Converts an `io::Error` into a `MuxError`.
 pub(crate) fn io_err(e: std::io::Error) -> MuxError {
     MuxError::Io(e)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::boxes::stsd::parse_stsd;
+
+    #[test]
+    fn test_that_colr_box_roundtrips_through_build_and_parse() {
+        // GIVEN — an Avc1 config with BT.709 color space
+        let color_space = ColorSpace {
+            primaries: ColorPrimaries::Bt709,
+            transfer: TransferCharacteristics::Bt709,
+            matrix: MatrixCoefficients::Bt709,
+            range: ColorRange::Limited,
+        };
+        let config = CodecConfig::Avc1 {
+            width: 1920,
+            height: 1080,
+            avcc: bytes::Bytes::from_static(&[1, 0x42, 0xC0, 0x1E, 0xFF]),
+            color_space: Some(color_space),
+        };
+
+        // WHEN — build stsd and parse it back
+        let stsd_bytes = build_stsd(&config).unwrap();
+        let parsed = parse_stsd(&stsd_bytes[8..], 0).unwrap();
+
+        // THEN — color space should survive the roundtrip
+        match parsed {
+            CodecConfig::Avc1 {
+                width,
+                height,
+                color_space: cs,
+                ..
+            } => {
+                assert_eq!(width, 1920);
+                assert_eq!(height, 1080);
+                let cs = cs.expect("color_space should be present after roundtrip");
+                assert_eq!(cs.primaries, ColorPrimaries::Bt709);
+                assert_eq!(cs.transfer, TransferCharacteristics::Bt709);
+                assert_eq!(cs.matrix, MatrixCoefficients::Bt709);
+                assert_eq!(cs.range, ColorRange::Limited);
+            }
+            other => panic!("expected Avc1, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_that_bt2020_pq_color_space_roundtrips() {
+        // GIVEN — BT.2020 PQ (HDR10) color space
+        let color_space = ColorSpace {
+            primaries: ColorPrimaries::Bt2020,
+            transfer: TransferCharacteristics::Smpte2084,
+            matrix: MatrixCoefficients::Bt2020NonConstant,
+            range: ColorRange::Full,
+        };
+        let config = CodecConfig::Hev1 {
+            width: 3840,
+            height: 2160,
+            hvcc: bytes::Bytes::from_static(&[1, 0]),
+            color_space: Some(color_space),
+        };
+
+        // WHEN
+        let stsd_bytes = build_stsd(&config).unwrap();
+        let parsed = parse_stsd(&stsd_bytes[8..], 0).unwrap();
+
+        // THEN
+        match parsed {
+            CodecConfig::Hev1 {
+                color_space: cs, ..
+            } => {
+                let cs = cs.expect("color_space should be present");
+                assert_eq!(cs.primaries, ColorPrimaries::Bt2020);
+                assert_eq!(cs.transfer, TransferCharacteristics::Smpte2084);
+                assert_eq!(cs.matrix, MatrixCoefficients::Bt2020NonConstant);
+                assert_eq!(cs.range, ColorRange::Full);
+            }
+            other => panic!("expected Hev1, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_that_stsd_without_color_space_roundtrips_as_none() {
+        // GIVEN — Avc1 config with no color space
+        let config = CodecConfig::Avc1 {
+            width: 640,
+            height: 480,
+            avcc: bytes::Bytes::from_static(&[1, 0x42, 0xC0, 0x1E, 0xFF]),
+            color_space: None,
+        };
+
+        // WHEN
+        let stsd_bytes = build_stsd(&config).unwrap();
+        let parsed = parse_stsd(&stsd_bytes[8..], 0).unwrap();
+
+        // THEN
+        match parsed {
+            CodecConfig::Avc1 { color_space, .. } => {
+                assert!(
+                    color_space.is_none(),
+                    "color_space should be None when not set"
+                );
+            }
+            other => panic!("expected Avc1, got {other:?}"),
+        }
+    }
 }

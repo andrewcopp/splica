@@ -7,10 +7,13 @@ use std::any::Any;
 
 use bytes::Bytes;
 use splica_core::error::EncodeError;
-use splica_core::media::{Frame, Packet, PixelFormat, TrackIndex, VideoFrame};
+use splica_core::media::{
+    ColorPrimaries, ColorRange, ColorSpace, Frame, MatrixCoefficients, Packet, PixelFormat,
+    TrackIndex, TransferCharacteristics, VideoFrame,
+};
 use splica_core::Encoder;
 
-use openh264::encoder::{EncoderConfig, FrameType};
+use openh264::encoder::{EncoderConfig, FrameType, VuiConfig};
 use openh264::formats::YUVSource;
 
 use crate::error::CodecError;
@@ -77,6 +80,7 @@ pub struct H264EncoderBuilder {
     level: Option<H264EncoderLevel>,
     track_index: TrackIndex,
     max_frame_rate: Option<f32>,
+    color_space: Option<ColorSpace>,
 }
 
 impl H264EncoderBuilder {
@@ -90,6 +94,7 @@ impl H264EncoderBuilder {
             level: None,
             track_index: TrackIndex(0),
             max_frame_rate: None,
+            color_space: None,
         }
     }
 
@@ -123,6 +128,12 @@ impl H264EncoderBuilder {
         self
     }
 
+    /// Sets the color space for VUI signaling in the output SPS.
+    pub fn color_space(mut self, cs: ColorSpace) -> Self {
+        self.color_space = Some(cs);
+        self
+    }
+
     /// Builds the H.264 encoder.
     pub fn build(self) -> Result<H264Encoder, CodecError> {
         let mut enc_config =
@@ -151,6 +162,10 @@ impl H264EncoderBuilder {
                 H264EncoderLevel::Level5_1 => openh264::encoder::Level::Level_5_1,
             };
             enc_config = enc_config.level(oh264_level);
+        }
+
+        if let Some(cs) = &self.color_space {
+            enc_config = enc_config.vui(to_vui_config(cs));
         }
 
         let api = openh264::OpenH264API::from_source();
@@ -287,6 +302,33 @@ impl Encoder for H264Encoder {
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
     }
+}
+
+/// Converts a splica `ColorSpace` into an OpenH264 `VuiConfig`.
+fn to_vui_config(cs: &ColorSpace) -> VuiConfig {
+    let primaries = match cs.primaries {
+        ColorPrimaries::Bt709 => openh264::encoder::ColorPrimaries::Bt709,
+        ColorPrimaries::Bt2020 => openh264::encoder::ColorPrimaries::Bt2020,
+        ColorPrimaries::Smpte432 => openh264::encoder::ColorPrimaries::Bt709,
+    };
+    let transfer = match cs.transfer {
+        TransferCharacteristics::Bt709 => openh264::encoder::TransferCharacteristics::Bt709,
+        TransferCharacteristics::Smpte2084 => openh264::encoder::TransferCharacteristics::Smpte2084,
+        TransferCharacteristics::HybridLogGamma => openh264::encoder::TransferCharacteristics::Hlg,
+    };
+    let matrix = match cs.matrix {
+        MatrixCoefficients::Bt709 => openh264::encoder::MatrixCoefficients::Bt709,
+        MatrixCoefficients::Bt2020NonConstant => openh264::encoder::MatrixCoefficients::Bt2020Ncl,
+        MatrixCoefficients::Bt2020Constant => openh264::encoder::MatrixCoefficients::Bt2020Cl,
+        MatrixCoefficients::Identity => openh264::encoder::MatrixCoefficients::Identity,
+    };
+    let full_range = matches!(cs.range, ColorRange::Full);
+
+    VuiConfig::new()
+        .color_primaries(primaries)
+        .transfer_characteristics(transfer)
+        .matrix_coefficients(matrix)
+        .full_range(full_range)
 }
 
 /// Adapter that implements `openh264::formats::YUVSource` for a `VideoFrame`.

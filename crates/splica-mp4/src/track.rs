@@ -1,8 +1,8 @@
 //! Per-track metadata assembled from parsed MP4 boxes.
 
 use splica_core::{
-    AudioCodec, AudioTrackInfo, ChannelLayout, Codec, ColorSpace, FrameRate, PixelFormat,
-    Timestamp, TrackIndex, TrackInfo, TrackKind, VideoCodec, VideoTrackInfo,
+    AudioCodec, AudioTrackInfo, ChannelLayout, Codec, FrameRate, PixelFormat, Timestamp,
+    TrackIndex, TrackInfo, TrackKind, VideoCodec, VideoTrackInfo,
 };
 
 use crate::boxes::stsd::CodecConfig;
@@ -62,11 +62,26 @@ impl Mp4Track {
         };
 
         let video = if self.is_video() {
-            let (w, h) = match &self.codec_config {
-                CodecConfig::Avc1 { width, height, .. }
-                | CodecConfig::Hev1 { width, height, .. }
-                | CodecConfig::Av1 { width, height, .. } => (*width as u32, *height as u32),
-                _ => (self.width, self.height),
+            let (w, h, color_space) = match &self.codec_config {
+                CodecConfig::Avc1 {
+                    width,
+                    height,
+                    color_space,
+                    ..
+                }
+                | CodecConfig::Hev1 {
+                    width,
+                    height,
+                    color_space,
+                    ..
+                }
+                | CodecConfig::Av1 {
+                    width,
+                    height,
+                    color_space,
+                    ..
+                } => (*width as u32, *height as u32, *color_space),
+                _ => (self.width, self.height, None),
             };
 
             let frame_rate = self.compute_frame_rate();
@@ -74,8 +89,8 @@ impl Mp4Track {
             Some(VideoTrackInfo {
                 width: w,
                 height: h,
-                pixel_format: Some(PixelFormat::Yuv420p), // Most common, actual format from codec config
-                color_space: Some(ColorSpace::BT709),     // Default, actual from codec config
+                pixel_format: Some(PixelFormat::Yuv420p),
+                color_space,
                 frame_rate,
             })
         } else {

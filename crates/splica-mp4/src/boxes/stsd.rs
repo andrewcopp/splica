@@ -4,6 +4,10 @@
 //! Codec-specific sub-boxes (avcC, esds) are stored as opaque bytes
 //! for downstream decoders.
 
+use splica_core::{
+    ColorPrimaries, ColorRange, ColorSpace, MatrixCoefficients, TransferCharacteristics,
+};
+
 use super::{find_box, parse_full_box_header, read_u16, read_u32, FourCC};
 use crate::error::Mp4Error;
 use bytes::Bytes;
@@ -16,18 +20,24 @@ pub enum CodecConfig {
         height: u16,
         /// Raw avcC box data (contains SPS/PPS).
         avcc: Bytes,
+        /// Color space from colr box (nclx type), if present.
+        color_space: Option<splica_core::ColorSpace>,
     },
     Hev1 {
         width: u16,
         height: u16,
         /// Raw hvcC box data.
         hvcc: Bytes,
+        /// Color space from colr box (nclx type), if present.
+        color_space: Option<splica_core::ColorSpace>,
     },
     Av1 {
         width: u16,
         height: u16,
         /// Raw av1C box data.
         av1c: Bytes,
+        /// Color space from colr box (nclx type), if present.
+        color_space: Option<splica_core::ColorSpace>,
     },
     Mp4a {
         sample_rate: u32,
@@ -104,6 +114,9 @@ fn parse_visual_sample_entry(
     // Sub-boxes start at offset 78 within the visual sample entry body
     let sub_box_data = &data[78..];
 
+    // Parse colr box if present (nclx type)
+    let color_space = parse_colr_box(sub_box_data, offset);
+
     match fourcc {
         b"avc1" | b"avc3" => {
             let avcc = find_box(sub_box_data, FourCC(*b"avcC"), offset)?
@@ -113,6 +126,7 @@ fn parse_visual_sample_entry(
                 width,
                 height,
                 avcc,
+                color_space,
             })
         }
         b"hev1" | b"hvc1" => {
@@ -123,6 +137,7 @@ fn parse_visual_sample_entry(
                 width,
                 height,
                 hvcc,
+                color_space,
             })
         }
         b"av01" => {
@@ -133,12 +148,68 @@ fn parse_visual_sample_entry(
                 width,
                 height,
                 av1c,
+                color_space,
             })
         }
         _ => Ok(CodecConfig::Unknown(
             String::from_utf8_lossy(fourcc).to_string(),
         )),
     }
+}
+
+/// Parses a colr box (nclx type) from visual sample entry sub-boxes.
+fn parse_colr_box(sub_box_data: &[u8], offset: u64) -> Option<ColorSpace> {
+    let colr = find_box(sub_box_data, FourCC(*b"colr"), offset).ok()??;
+
+    // colr body: 4-byte color_type + type-specific data
+    if colr.body.len() < 11 {
+        return None;
+    }
+
+    // Only parse nclx (ISO 23001-8) type
+    if &colr.body[0..4] != b"nclx" {
+        return None;
+    }
+
+    let primaries_raw = u16::from_be_bytes([colr.body[4], colr.body[5]]);
+    let transfer_raw = u16::from_be_bytes([colr.body[6], colr.body[7]]);
+    let matrix_raw = u16::from_be_bytes([colr.body[8], colr.body[9]]);
+    let full_range = colr.body[10] & 0x80 != 0;
+
+    let primaries = match primaries_raw {
+        1 => ColorPrimaries::Bt709,
+        9 => ColorPrimaries::Bt2020,
+        12 => ColorPrimaries::Smpte432,
+        _ => return None,
+    };
+
+    let transfer = match transfer_raw {
+        1 => TransferCharacteristics::Bt709,
+        16 => TransferCharacteristics::Smpte2084,
+        18 => TransferCharacteristics::HybridLogGamma,
+        _ => return None,
+    };
+
+    let matrix = match matrix_raw {
+        0 => MatrixCoefficients::Identity,
+        1 => MatrixCoefficients::Bt709,
+        9 => MatrixCoefficients::Bt2020NonConstant,
+        10 => MatrixCoefficients::Bt2020Constant,
+        _ => return None,
+    };
+
+    let range = if full_range {
+        ColorRange::Full
+    } else {
+        ColorRange::Limited
+    };
+
+    Some(ColorSpace {
+        primaries,
+        transfer,
+        matrix,
+        range,
+    })
 }
 
 fn parse_audio_sample_entry(data: &[u8], offset: u64) -> Result<CodecConfig, Mp4Error> {

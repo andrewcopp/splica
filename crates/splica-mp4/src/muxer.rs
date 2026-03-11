@@ -356,6 +356,7 @@ impl<W: Write + Seek> Muxer for Mp4Muxer<W> {
                 width: v.width as u16,
                 height: v.height as u16,
                 avcc: bytes::Bytes::new(),
+                color_space: v.color_space,
             },
             (TrackKind::Audio, _, Some(a)) => CodecConfig::Mp4a {
                 sample_rate: a.sample_rate,
