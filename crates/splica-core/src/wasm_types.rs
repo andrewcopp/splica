@@ -5,7 +5,7 @@
 
 use serde::Serialize;
 
-use crate::media::{AudioCodec, Codec, TrackInfo, TrackKind, VideoCodec};
+use crate::media::{TrackInfo, TrackKind};
 
 /// JS-facing video track metadata.
 #[derive(Serialize)]
@@ -33,7 +33,7 @@ impl JsVideoTrackInfo {
         Self {
             width: video.map(|v| v.width).unwrap_or(0),
             height: video.map(|v| v.height).unwrap_or(0),
-            codec: format_codec(&track.codec),
+            codec: track.codec.to_string(),
             frame_rate: video.and_then(|v| v.frame_rate.map(|fr| fr.to_string())),
             duration_seconds: track.duration.map(|d| d.as_seconds_f64()),
         }
@@ -45,28 +45,11 @@ impl JsAudioTrackInfo {
     pub fn from_track_info(track: &TrackInfo) -> Self {
         let audio = track.audio.as_ref();
         Self {
-            codec: format_codec(&track.codec),
+            codec: track.codec.to_string(),
             sample_rate: audio.map(|a| a.sample_rate).unwrap_or(0),
             channels: audio.and_then(|a| a.channel_layout.map(|cl| cl.channel_count())),
             duration_seconds: track.duration.map(|d| d.as_seconds_f64()),
         }
-    }
-}
-
-/// Formats a `Codec` as a human-readable string for JS consumers.
-pub fn format_codec(codec: &Codec) -> String {
-    match codec {
-        Codec::Video(vc) => match vc {
-            VideoCodec::H264 => "H.264".to_string(),
-            VideoCodec::H265 => "H.265".to_string(),
-            VideoCodec::Av1 => "AV1".to_string(),
-            VideoCodec::Other(s) => s.clone(),
-        },
-        Codec::Audio(ac) => match ac {
-            AudioCodec::Aac => "AAC".to_string(),
-            AudioCodec::Opus => "Opus".to_string(),
-            AudioCodec::Other(s) => s.clone(),
-        },
     }
 }
 

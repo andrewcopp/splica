@@ -104,6 +104,17 @@ pub enum VideoCodec {
     Other(String),
 }
 
+impl std::fmt::Display for VideoCodec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            VideoCodec::H264 => f.write_str("H.264"),
+            VideoCodec::H265 => f.write_str("H.265"),
+            VideoCodec::Av1 => f.write_str("AV1"),
+            VideoCodec::Other(s) => f.write_str(s),
+        }
+    }
+}
+
 /// Supported audio codecs.
 ///
 /// Includes an `Other` variant for codecs not directly supported by splica.
@@ -115,11 +126,30 @@ pub enum AudioCodec {
     Other(String),
 }
 
+impl std::fmt::Display for AudioCodec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AudioCodec::Aac => f.write_str("AAC"),
+            AudioCodec::Opus => f.write_str("Opus"),
+            AudioCodec::Other(s) => f.write_str(s),
+        }
+    }
+}
+
 /// A codec identifier (video or audio).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Codec {
     Video(VideoCodec),
     Audio(AudioCodec),
+}
+
+impl std::fmt::Display for Codec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Codec::Video(vc) => vc.fmt(f),
+            Codec::Audio(ac) => ac.fmt(f),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

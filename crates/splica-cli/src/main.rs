@@ -632,7 +632,7 @@ fn probe_inner(file: &Path, format: &OutputFormat) -> Result<()> {
         .tracks()
         .iter()
         .map(|t| {
-            let codec = format_codec(&t.codec);
+            let codec = t.codec.to_string();
 
             let kind = match t.kind {
                 TrackKind::Video => "video",
@@ -740,22 +740,6 @@ fn format_color_space(cs: &splica_core::ColorSpace) -> String {
     format!("{name}/{range}")
 }
 
-fn format_codec(codec: &splica_core::Codec) -> String {
-    match codec {
-        splica_core::Codec::Video(vc) => match vc {
-            splica_core::VideoCodec::H264 => "H.264".to_string(),
-            splica_core::VideoCodec::H265 => "H.265".to_string(),
-            splica_core::VideoCodec::Av1 => "AV1".to_string(),
-            splica_core::VideoCodec::Other(s) => s.clone(),
-        },
-        splica_core::Codec::Audio(ac) => match ac {
-            splica_core::AudioCodec::Aac => "AAC".to_string(),
-            splica_core::AudioCodec::Opus => "Opus".to_string(),
-            splica_core::AudioCodec::Other(s) => s.clone(),
-        },
-    }
-}
-
 // ---------------------------------------------------------------------------
 // convert
 // ---------------------------------------------------------------------------
@@ -785,7 +769,7 @@ fn stream_copy(args: &ProcessArgs<'_>, json_mode: bool) -> Result<TranscodeOutpu
         .iter()
         .filter(|t| t.kind == TrackKind::Audio)
         .map(|t| {
-            let codec = format_codec(&t.codec);
+            let codec = t.codec.to_string();
             let sample_rate = t.audio.as_ref().map(|a| a.sample_rate).unwrap_or(0);
             let channels = t
                 .audio
