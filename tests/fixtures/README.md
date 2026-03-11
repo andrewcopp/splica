@@ -32,7 +32,10 @@ ffmpeg -i bigbuckbunny_h264.mp4 -c:v libsvtav1 -crf 40 -preset 8 -an -y bigbuckb
 
 ## Notes
 
-- All files are video-only (no audio tracks). Audio fixture files
-  (H.264+AAC) will be added in a future update.
+- All files are video-only (no audio tracks). Audio codec integration
+  testing uses inline synthetic data (encode → decode round-trips) in
+  `crates/splica-codec/tests/aac_integration.rs` and
+  `crates/splica-codec/tests/opus_integration.rs` rather than fixture
+  files on disk.
 - These files are small enough (~1 MB each) for regular git storage.
   Git LFS is not required.
