@@ -5,6 +5,8 @@ pub mod media;
 pub mod smpte;
 pub mod timestamp;
 pub mod traits;
+#[cfg(feature = "serde")]
+pub mod wasm_types;
 
 pub use error::{
     DecodeError, DemuxError, EncodeError, ErrorKind, FilterError, MuxError, PipelineError,
