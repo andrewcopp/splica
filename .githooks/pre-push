@@ -1,0 +1,32 @@
+#!/bin/sh
+
+# Prevent pushing code that doesn't compile or pass tests.
+# To enable: git config core.hooksPath .githooks
+
+set -e
+
+echo "pre-push: checking formatting..."
+if ! cargo fmt --check > /dev/null 2>&1; then
+    echo "error: cargo fmt check failed. Run 'cargo fmt' and commit the changes."
+    exit 1
+fi
+
+echo "pre-push: building all targets..."
+if ! cargo build --all-targets 2>&1; then
+    echo "error: cargo build failed. Fix compilation errors before pushing."
+    exit 1
+fi
+
+echo "pre-push: running clippy on changed crates..."
+if ! cargo clippy --all-targets -- -D warnings 2>&1; then
+    echo "error: clippy found warnings. Fix them before pushing."
+    exit 1
+fi
+
+echo "pre-push: running tests..."
+if ! cargo test 2>&1; then
+    echo "error: tests failed. Fix failing tests before pushing."
+    exit 1
+fi
+
+echo "pre-push: all checks passed."

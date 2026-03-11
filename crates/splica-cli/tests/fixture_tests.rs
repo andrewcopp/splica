@@ -36,7 +36,10 @@ fn test_that_probe_reports_h264_codec_for_real_mp4() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("H.264"), "expected H.264 in output: {stdout}");
+    assert!(
+        stdout.contains("H.264"),
+        "expected H.264 in output: {stdout}"
+    );
 }
 
 #[test]
@@ -85,7 +88,10 @@ fn test_that_probe_reports_h265_codec_for_real_mp4() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("H.265"), "expected H.265 in output: {stdout}");
+    assert!(
+        stdout.contains("H.265"),
+        "expected H.265 in output: {stdout}"
+    );
 }
 
 #[test]
@@ -157,7 +163,9 @@ fn test_that_transcode_of_vp9_produces_clear_error() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let combined = format!("{stderr}{stdout}");
     assert!(
-        combined.contains("error") || combined.contains("Error") || combined.contains("unsupported"),
+        combined.contains("error")
+            || combined.contains("Error")
+            || combined.contains("unsupported"),
         "expected error message, got: {combined}"
     );
 }
