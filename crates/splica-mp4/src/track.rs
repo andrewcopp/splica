@@ -5,6 +5,7 @@ use splica_core::{
     TrackIndex, TrackInfo, TrackKind, VideoCodec, VideoTrackInfo,
 };
 
+use crate::boxes::hdlr::HandlerType;
 use crate::boxes::stsd::CodecConfig;
 use crate::sample_table::SampleTable;
 
@@ -13,7 +14,7 @@ use crate::sample_table::SampleTable;
 #[allow(dead_code)]
 pub(crate) struct Mp4Track {
     pub track_id: u32,
-    pub handler_type: [u8; 4],
+    pub handler_type: HandlerType,
     pub timescale: u32,
     pub duration: u64,
     pub codec_config: CodecConfig,
@@ -25,11 +26,11 @@ pub(crate) struct Mp4Track {
 
 impl Mp4Track {
     pub fn is_video(&self) -> bool {
-        &self.handler_type == b"vide"
+        self.handler_type == HandlerType::Video
     }
 
     pub fn is_audio(&self) -> bool {
-        &self.handler_type == b"soun"
+        self.handler_type == HandlerType::Audio
     }
 
     pub fn to_track_info(&self, index: TrackIndex) -> TrackInfo {

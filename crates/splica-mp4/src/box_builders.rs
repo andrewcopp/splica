@@ -7,6 +7,7 @@ use splica_core::{
     ColorPrimaries, ColorRange, ColorSpace, MatrixCoefficients, MuxError, TransferCharacteristics,
 };
 
+use crate::boxes::hdlr::HandlerType;
 use crate::boxes::stsd::CodecConfig;
 
 /// Wraps `body` in a standard ISO BMFF box with the given four-character code.
@@ -81,11 +82,11 @@ pub(crate) fn build_mdhd(timescale: u32, duration: u32) -> Vec<u8> {
 }
 
 /// Builds an `hdlr` (Handler Reference) box.
-pub(crate) fn build_hdlr(handler_type: &[u8; 4]) -> Vec<u8> {
+pub(crate) fn build_hdlr(handler_type: HandlerType) -> Vec<u8> {
     let mut body = Vec::new();
     body.extend_from_slice(&[0, 0, 0, 0]); // version=0, flags=0
     body.extend_from_slice(&0u32.to_be_bytes()); // pre_defined
-    body.extend_from_slice(handler_type);
+    body.extend_from_slice(handler_type.as_bytes());
     body.extend_from_slice(&[0u8; 12]); // reserved
     body.push(0); // name (null-terminated empty string)
     make_full_box(b"hdlr", &body)

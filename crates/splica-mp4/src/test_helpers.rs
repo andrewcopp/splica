@@ -3,6 +3,8 @@
 //! Builds minimal valid MP4 byte sequences programmatically so tests
 //! are self-contained with no external fixture files.
 
+use crate::boxes::hdlr::HandlerType;
+
 /// Write a big-endian u16.
 fn w16(buf: &mut Vec<u8>, v: u16) {
     buf.extend_from_slice(&v.to_be_bytes());
@@ -108,10 +110,10 @@ fn build_mdhd(timescale: u32, duration: u32) -> Vec<u8> {
 }
 
 /// Build an hdlr box.
-fn build_hdlr(handler_type: &[u8; 4]) -> Vec<u8> {
+fn build_hdlr(handler_type: HandlerType) -> Vec<u8> {
     let mut content = Vec::new();
     w32(&mut content, 0); // pre_defined
-    content.extend_from_slice(handler_type);
+    content.extend_from_slice(handler_type.as_bytes());
     content.extend_from_slice(&[0u8; 12]); // reserved
     content.push(0); // name (null-terminated)
 
@@ -263,7 +265,7 @@ fn build_stss(sync_samples: &[u32]) -> Vec<u8> {
 /// Configuration for a test track.
 pub struct TestTrack {
     pub track_id: u32,
-    pub handler: [u8; 4],
+    pub handler: HandlerType,
     pub timescale: u32,
     pub sample_sizes: Vec<u32>,
     pub sample_delta: u32,
@@ -278,7 +280,7 @@ impl TestTrack {
     pub fn video(width: u16, height: u16, num_samples: u32) -> Self {
         Self {
             track_id: 1,
-            handler: *b"vide",
+            handler: HandlerType::Video,
             timescale: 30000,
             sample_sizes: vec![1000; num_samples as usize],
             sample_delta: 1001,          // 29.97fps
@@ -293,7 +295,7 @@ impl TestTrack {
     pub fn audio(sample_rate: u32, num_samples: u32) -> Self {
         Self {
             track_id: 2,
-            handler: *b"soun",
+            handler: HandlerType::Audio,
             timescale: sample_rate,
             sample_sizes: vec![512; num_samples as usize],
             sample_delta: 1024,
@@ -519,9 +521,9 @@ pub fn build_test_mp4(tracks: &[TestTrack]) -> Vec<u8> {
             track.height as u32,
         );
         let mdhd = build_mdhd(track.timescale, track_duration_media as u32);
-        let hdlr = build_hdlr(&track.handler);
+        let hdlr = build_hdlr(track.handler);
 
-        let stsd = if &track.handler == b"vide" {
+        let stsd = if track.handler == HandlerType::Video {
             build_stsd_avc1(track.width, track.height)
         } else {
             build_stsd_mp4a(track.sample_rate, track.channel_count)
@@ -560,7 +562,7 @@ pub fn build_test_mp4(tracks: &[TestTrack]) -> Vec<u8> {
 
         // minf needs a media-specific header box (vmhd/smhd) but many parsers tolerate its absence.
         // Add a minimal vmhd or smhd.
-        let media_header = if &track.handler == b"vide" {
+        let media_header = if track.handler == HandlerType::Video {
             let body = full_box_body(0, 1, &[0u8; 8]); // vmhd with flag=1
             make_box(b"vmhd", &body)
         } else {
@@ -645,9 +647,9 @@ pub fn build_test_mp4(tracks: &[TestTrack]) -> Vec<u8> {
             track.height as u32,
         );
         let mdhd = build_mdhd(track.timescale, track_duration_media as u32);
-        let hdlr = build_hdlr(&track.handler);
+        let hdlr = build_hdlr(track.handler);
 
-        let stsd = if &track.handler == b"vide" {
+        let stsd = if track.handler == HandlerType::Video {
             build_stsd_avc1(track.width, track.height)
         } else {
             build_stsd_mp4a(track.sample_rate, track.channel_count)
@@ -674,7 +676,7 @@ pub fn build_test_mp4(tracks: &[TestTrack]) -> Vec<u8> {
         }
         let stbl = make_box(b"stbl", &stbl_body);
 
-        let media_header = if &track.handler == b"vide" {
+        let media_header = if track.handler == HandlerType::Video {
             make_box(b"vmhd", &full_box_body(0, 1, &[0u8; 8]))
         } else {
             make_box(b"smhd", &full_box_body(0, 0, &[0u8; 4]))

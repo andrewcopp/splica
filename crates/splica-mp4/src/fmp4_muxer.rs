@@ -25,6 +25,7 @@ use crate::box_builders::{
     build_dinf, build_hdlr, build_mdhd, build_mvhd, build_smhd, build_stsd, build_tkhd, build_vmhd,
     io_err, make_box, make_full_box,
 };
+use crate::boxes::hdlr::HandlerType;
 use crate::boxes::stsd::CodecConfig;
 
 /// A sample buffered within a fragment before it is flushed.
@@ -173,9 +174,9 @@ impl<W: Write> FragmentedMp4Muxer<W> {
 
         let mdhd = build_mdhd(track.timescale, 0);
         let handler = if track.track_info.kind == TrackKind::Video {
-            b"vide"
+            HandlerType::Video
         } else {
-            b"soun"
+            HandlerType::Audio
         };
         let hdlr = build_hdlr(handler);
 

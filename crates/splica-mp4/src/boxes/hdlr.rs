@@ -3,11 +3,41 @@
 use super::parse_full_box_header;
 use crate::error::Mp4Error;
 
+/// Handler type from an hdlr box.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HandlerType {
+    /// Video track (`b"vide"`).
+    Video,
+    /// Audio track (`b"soun"`).
+    Audio,
+    /// Any other handler type.
+    Other([u8; 4]),
+}
+
+impl HandlerType {
+    /// Returns the four-byte representation for box building.
+    pub fn as_bytes(&self) -> &[u8; 4] {
+        match self {
+            HandlerType::Video => b"vide",
+            HandlerType::Audio => b"soun",
+            HandlerType::Other(fourcc) => fourcc,
+        }
+    }
+
+    fn from_bytes(bytes: [u8; 4]) -> Self {
+        match &bytes {
+            b"vide" => HandlerType::Video,
+            b"soun" => HandlerType::Audio,
+            _ => HandlerType::Other(bytes),
+        }
+    }
+}
+
 /// Parsed handler box.
 #[derive(Debug)]
 pub struct HandlerBox {
-    /// Handler type fourcc: b"vide", b"soun", b"hint", etc.
-    pub handler_type: [u8; 4],
+    /// Handler type: video, audio, or other.
+    pub handler_type: HandlerType,
 }
 
 /// Parse an hdlr box body.
@@ -19,6 +49,8 @@ pub fn parse_hdlr(data: &[u8], offset: u64) -> Result<HandlerBox, Mp4Error> {
         return Err(Mp4Error::UnexpectedEof { offset });
     }
 
-    let handler_type = [body[4], body[5], body[6], body[7]];
-    Ok(HandlerBox { handler_type })
+    let fourcc = [body[4], body[5], body[6], body[7]];
+    Ok(HandlerBox {
+        handler_type: HandlerType::from_bytes(fourcc),
+    })
 }
