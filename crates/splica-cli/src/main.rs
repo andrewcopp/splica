@@ -1293,10 +1293,12 @@ fn process_inner(args: &ProcessArgs<'_>, json_mode: bool) -> Result<TranscodeOut
         splica_core::AudioCodec::Aac
     };
 
-    // Determine which audio tracks need transcoding vs pass-through
+    // Determine which audio tracks need transcoding vs pass-through.
+    // Volume adjustment requires re-encoding even if the codec matches.
+    let volume_requested = args.volume.is_some();
     let audio_needs_transcode: Vec<bool> = audio_track_configs
         .iter()
-        .map(|ac| ac.codec != target_audio_codec)
+        .map(|ac| ac.codec != target_audio_codec || volume_requested)
         .collect();
 
     // Collect audio track metadata for JSON output
