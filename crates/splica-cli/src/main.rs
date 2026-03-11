@@ -305,7 +305,7 @@ fn extract_error_kind(error: &miette::Report) -> Option<ErrorKind> {
 fn error_kind_to_classification(kind: ErrorKind) -> (&'static str, i32) {
     match kind {
         ErrorKind::InvalidInput => ("bad_input", exit_code::BAD_INPUT),
-        ErrorKind::UnsupportedFormat => ("bad_input", exit_code::BAD_INPUT),
+        ErrorKind::UnsupportedFormat => ("unsupported_format", exit_code::BAD_INPUT),
         ErrorKind::Io => ("internal_error", exit_code::INTERNAL),
         ErrorKind::ResourceExhausted => ("resource_exhausted", exit_code::RESOURCE_EXHAUSTED),
         ErrorKind::Internal => ("internal_error", exit_code::INTERNAL),

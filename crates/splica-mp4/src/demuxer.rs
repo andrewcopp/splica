@@ -171,6 +171,7 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
 
         let mut mp4_tracks = Vec::new();
         let mut metadata_boxes = Vec::new();
+        let mut skipped_codecs: Vec<String> = Vec::new();
 
         for box_result in boxes::iter_boxes(&moov, 0) {
             let parsed = box_result?;
@@ -183,8 +184,8 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
                                 mp4_tracks.push(track);
                             }
                         }
-                        Err(Mp4Error::UnsupportedCodec { .. }) => {
-                            // Skip tracks with unsupported codecs rather than failing
+                        Err(Mp4Error::UnsupportedCodec { fourcc }) => {
+                            skipped_codecs.push(fourcc);
                             continue;
                         }
                         Err(e) => return Err(e),
@@ -215,6 +216,14 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
                     // Skip mvhd (already parsed) and other boxes
                 }
             }
+        }
+
+        // If all tracks were skipped due to unsupported codecs, surface the error
+        // instead of returning an empty track list that fails downstream.
+        if mp4_tracks.is_empty() && !skipped_codecs.is_empty() {
+            return Err(Mp4Error::UnsupportedCodec {
+                fourcc: skipped_codecs.join(", "),
+            });
         }
 
         // Build TrackInfo for each track

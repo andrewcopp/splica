@@ -231,3 +231,34 @@ fn test_that_process_of_vp9_with_resize_produces_clear_error() {
         "expected error message about H.264, got: {combined}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Error kind distinction (SPL-86)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_that_probe_json_of_corrupt_file_reports_bad_input_error_kind() {
+    // A corrupt file (invalid magic bytes) should produce error_kind "bad_input",
+    // not "unsupported_format".
+    let dir = std::env::temp_dir().join("splica_error_kind_tests");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("corrupt_error_kind.mp4");
+    std::fs::write(&path, b"this is definitely not a valid media file").unwrap();
+
+    let output = splica_binary()
+        .args(["probe", "--format", "json", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(json["type"], "error");
+    assert_eq!(
+        json["error_kind"], "bad_input",
+        "corrupt file should produce 'bad_input', got: {}",
+        json["error_kind"]
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
