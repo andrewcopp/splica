@@ -669,7 +669,7 @@ mod tests {
                         1,
                         1,
                         PixelFormat::Yuv420p,
-                        ColorSpace::BT709,
+                        Some(ColorSpace::BT709),
                         p.pts,
                         Bytes::from(vec![0u8; 6]), // Y(1) + U(1) + V(1) padded
                         vec![

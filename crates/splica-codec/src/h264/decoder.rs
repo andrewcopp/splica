@@ -167,6 +167,7 @@ impl H264Decoder {
     fn yuv_to_video_frame(
         yuv: &openh264::decoder::DecodedYUV<'_>,
         pts: splica_core::Timestamp,
+        color_space: Option<ColorSpace>,
     ) -> Result<VideoFrame, CodecError> {
         let (width, height) = yuv.dimensions();
         let (uv_width, uv_height) = yuv.dimensions_uv();
@@ -229,7 +230,7 @@ impl H264Decoder {
             w,
             h,
             PixelFormat::Yuv420p,
-            ColorSpace::BT709, // H.264 Baseline/Main/High typically uses BT.709 for HD
+            color_space,
             pts,
             Bytes::from(buf),
             planes,
@@ -255,7 +256,7 @@ impl Decoder for H264Decoder {
                 // Decode the packet
                 match self.inner.decode(&annex_b) {
                     Ok(Some(yuv)) => {
-                        let frame = Self::yuv_to_video_frame(&yuv, pkt.pts)?;
+                        let frame = Self::yuv_to_video_frame(&yuv, pkt.pts, None)?;
                         self.pending_frame = Some(frame);
                     }
                     Ok(None) => {
@@ -283,7 +284,7 @@ impl Decoder for H264Decoder {
                             // Use a zero timestamp for flushed frames — caller
                             // should use the last known PTS
                             let pts = splica_core::Timestamp::new(0, 1).unwrap();
-                            let frame = Self::yuv_to_video_frame(yuv, pts)?;
+                            let frame = Self::yuv_to_video_frame(yuv, pts, None)?;
                             self.pending_frame = Some(frame);
                         } else {
                             self.pending_frame = None;

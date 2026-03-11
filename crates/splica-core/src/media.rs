@@ -354,8 +354,8 @@ pub struct VideoFrame {
     pub height: u32,
     /// Pixel format.
     pub pixel_format: PixelFormat,
-    /// Color space metadata.
-    pub color_space: ColorSpace,
+    /// Color space metadata (`None` when the source did not signal color info).
+    pub color_space: Option<ColorSpace>,
     /// Presentation timestamp.
     pub pts: Timestamp,
     /// Contiguous pixel data buffer containing all planes.
@@ -389,7 +389,7 @@ impl VideoFrame {
         width: u32,
         height: u32,
         pixel_format: PixelFormat,
-        color_space: ColorSpace,
+        color_space: Option<ColorSpace>,
         pts: Timestamp,
         data: Bytes,
         planes: Vec<PlaneLayout>,
@@ -581,7 +581,7 @@ mod tests {
             1920,
             1080,
             PixelFormat::Yuv420p,
-            ColorSpace::BT709,
+            Some(ColorSpace::BT709),
             Timestamp::new(0, 30).unwrap(),
             Bytes::from(buf),
             vec![
@@ -608,9 +608,10 @@ mod tests {
         .unwrap();
 
         // THEN — Elena can inspect color space directly
-        assert_eq!(frame.color_space.primaries, ColorPrimaries::Bt709);
-        assert_eq!(frame.color_space.transfer, TransferCharacteristics::Bt709);
-        assert_eq!(frame.color_space.matrix, MatrixCoefficients::Bt709);
+        let cs = frame.color_space.unwrap();
+        assert_eq!(cs.primaries, ColorPrimaries::Bt709);
+        assert_eq!(cs.transfer, TransferCharacteristics::Bt709);
+        assert_eq!(cs.matrix, MatrixCoefficients::Bt709);
     }
 
     #[test]
@@ -620,7 +621,7 @@ mod tests {
             320,
             240,
             PixelFormat::Yuv420p,
-            ColorSpace::BT709,
+            Some(ColorSpace::BT709),
             Timestamp::new(90, 30).unwrap(),
             Bytes::new(),
             vec![],
@@ -712,7 +713,7 @@ mod tests {
             4,
             2,
             PixelFormat::Yuv420p,
-            ColorSpace::BT709,
+            Some(ColorSpace::BT709),
             Timestamp::new(0, 30).unwrap(),
             Bytes::from(buf),
             vec![
@@ -755,7 +756,7 @@ mod tests {
             10,
             10,
             PixelFormat::Yuv420p,
-            ColorSpace::BT709,
+            Some(ColorSpace::BT709),
             Timestamp::new(0, 30).unwrap(),
             buf,
             vec![PlaneLayout {
@@ -783,7 +784,7 @@ mod tests {
             10,
             5,
             PixelFormat::Yuv420p,
-            ColorSpace::BT709,
+            Some(ColorSpace::BT709),
             Timestamp::new(0, 30).unwrap(),
             buf,
             vec![PlaneLayout {
