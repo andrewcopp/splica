@@ -230,6 +230,13 @@ struct CompleteEvent {
     frames_encoded: u64,
     packets_written: u64,
     audio_tracks: Vec<TranscodeAudioInfo>,
+    mux_ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    output_codec: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    output_duration_secs: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    output_bitrate_kbps: Option<u64>,
 }
 
 #[derive(Serialize)]
@@ -546,6 +553,50 @@ fn output_container(path: &Path) -> Option<ContainerFormat> {
     ContainerFormat::from_extension(ext)
 }
 
+/// QC metadata extracted from the output file after muxing.
+struct OutputQc {
+    codec: Option<String>,
+    duration_secs: Option<f64>,
+    bitrate_kbps: Option<u64>,
+}
+
+/// Probes the output file to extract QC metadata for the complete event.
+fn probe_output_qc(path: &Path) -> OutputQc {
+    let demuxer = match open_demuxer(path) {
+        Ok(d) => d,
+        Err(_) => {
+            return OutputQc {
+                codec: None,
+                duration_secs: None,
+                bitrate_kbps: None,
+            }
+        }
+    };
+
+    let video_track = demuxer.tracks().iter().find(|t| t.kind == TrackKind::Video);
+
+    let codec = video_track.map(|t| t.codec.to_string());
+    let duration_secs = demuxer
+        .tracks()
+        .iter()
+        .filter_map(|t| t.duration.map(|d| d.as_seconds_f64()))
+        .reduce(f64::max);
+
+    let bitrate_kbps = duration_secs.and_then(|dur| {
+        if dur <= 0.0 {
+            return None;
+        }
+        let file_size = std::fs::metadata(path).ok()?.len();
+        Some((file_size as f64 * 8.0 / dur / 1000.0) as u64)
+    });
+
+    OutputQc {
+        codec,
+        duration_secs,
+        bitrate_kbps,
+    }
+}
+
 /// Opens a demuxer for the given file, auto-detecting the container format.
 fn open_demuxer(path: &Path) -> Result<Box<dyn Demuxer>> {
     let mut file = File::open(path)
@@ -828,14 +879,27 @@ fn stream_copy(args: &ProcessArgs<'_>, json_mode: bool) -> Result<TranscodeOutpu
         packet_count += 1;
     }
 
-    muxer
-        .finalize()
-        .into_diagnostic()
-        .wrap_err("failed to finalize output")?;
+    let mux_result = muxer.finalize();
+    let mux_ok = mux_result.is_ok();
 
     if !json_mode {
-        eprintln!("  Done. Copied {packet_count} packets across {track_count} tracks.");
+        if mux_ok {
+            eprintln!("  Done. Copied {packet_count} packets across {track_count} tracks.");
+        }
+        mux_result
+            .into_diagnostic()
+            .wrap_err("failed to finalize output")?;
     }
+
+    let qc = if json_mode {
+        probe_output_qc(args.output)
+    } else {
+        OutputQc {
+            codec: None,
+            duration_secs: None,
+            bitrate_kbps: None,
+        }
+    };
 
     Ok(TranscodeOutput {
         packets_read: packet_count,
@@ -843,6 +907,10 @@ fn stream_copy(args: &ProcessArgs<'_>, json_mode: bool) -> Result<TranscodeOutpu
         frames_encoded: 0,
         packets_written: packet_count,
         audio_tracks,
+        mux_ok,
+        output_codec: qc.codec,
+        output_duration_secs: qc.duration_secs,
+        output_bitrate_kbps: qc.bitrate_kbps,
     })
 }
 
@@ -1198,6 +1266,10 @@ fn process(args: &ProcessArgs<'_>, format: &OutputFormat) -> Result<()> {
                     frames_encoded: out.frames_encoded,
                     packets_written: out.packets_written,
                     audio_tracks: out.audio_tracks,
+                    mux_ok: out.mux_ok,
+                    output_codec: out.output_codec,
+                    output_duration_secs: out.output_duration_secs,
+                    output_bitrate_kbps: out.output_bitrate_kbps,
                 };
                 println!("{}", serde_json::to_string(&complete).unwrap());
                 Ok(())
@@ -1227,6 +1299,10 @@ struct TranscodeOutput {
     frames_encoded: u64,
     packets_written: u64,
     audio_tracks: Vec<TranscodeAudioInfo>,
+    mux_ok: bool,
+    output_codec: Option<String>,
+    output_duration_secs: Option<f64>,
+    output_bitrate_kbps: Option<u64>,
 }
 /// Audio codec config extracted from the demuxer for audio tracks.
 #[derive(Debug, Clone)]
@@ -1669,11 +1745,25 @@ fn process_inner(args: &ProcessArgs<'_>, json_mode: bool) -> Result<TranscodeOut
         eprintln!("\r  Done.                                        ");
     }
 
+    let qc = if json_mode {
+        probe_output_qc(args.output)
+    } else {
+        OutputQc {
+            codec: None,
+            duration_secs: None,
+            bitrate_kbps: None,
+        }
+    };
+
     Ok(TranscodeOutput {
         packets_read: counter_packets_read.load(Ordering::Relaxed),
         frames_decoded: counter_frames_decoded.load(Ordering::Relaxed),
         frames_encoded: counter_frames_encoded.load(Ordering::Relaxed),
         packets_written: counter_packets_written.load(Ordering::Relaxed),
         audio_tracks,
+        mux_ok: true,
+        output_codec: qc.codec,
+        output_duration_secs: qc.duration_secs,
+        output_bitrate_kbps: qc.bitrate_kbps,
     })
 }

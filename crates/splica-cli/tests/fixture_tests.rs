@@ -197,6 +197,63 @@ fn test_that_process_json_includes_audio_tracks_array() {
     let _ = std::fs::remove_file("/tmp/splica_test_json_contract.mp4");
 }
 
+#[test]
+fn test_that_process_json_complete_event_includes_qc_fields() {
+    // GIVEN — a known fixture
+    let output_path = "/tmp/splica_test_json_qc.mp4";
+
+    // WHEN — process with --format json
+    let output = splica_binary()
+        .args([
+            "process",
+            "-i",
+            &fixture_path("bigbuckbunny_h264.mp4"),
+            "-o",
+            output_path,
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "process should succeed. stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+
+    // THEN — complete event has QC fields
+    assert_eq!(json["type"], "complete");
+    assert_eq!(json["mux_ok"], true);
+    assert!(
+        json["output_codec"].is_string(),
+        "output_codec should be a string"
+    );
+    assert!(
+        json["output_duration_secs"].is_number(),
+        "output_duration_secs should be a number"
+    );
+    assert!(
+        json["output_bitrate_kbps"].is_number(),
+        "output_bitrate_kbps should be a number"
+    );
+
+    // Duration should be plausible (BBB clip is ~2s)
+    let duration = json["output_duration_secs"].as_f64().unwrap();
+    assert!(duration > 0.5, "duration too short: {duration}");
+    assert!(duration < 30.0, "duration too long: {duration}");
+
+    // Bitrate should be plausible (> 0 kbps)
+    let bitrate = json["output_bitrate_kbps"].as_u64().unwrap();
+    assert!(bitrate > 0, "bitrate should be positive");
+
+    // Clean up
+    let _ = std::fs::remove_file(output_path);
+}
+
 // ---------------------------------------------------------------------------
 // Error handling
 // ---------------------------------------------------------------------------
