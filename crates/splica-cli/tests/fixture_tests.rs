@@ -143,13 +143,18 @@ fn test_that_probe_reports_correct_vp9_resolution() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn test_that_transcode_of_vp9_produces_clear_error() {
-    // VP9 can't be transcoded with our H.264-only encoder
+fn test_that_process_of_vp9_with_resize_produces_clear_error() {
+    // VP9 can't be re-encoded with our H.264-only encoder.
+    // --resize forces re-encoding, which triggers the error.
     let output = splica_binary()
         .args([
-            "transcode",
+            "process",
+            "-i",
             &fixture_path("bigbuckbunny_vp9.webm"),
+            "-o",
             "/tmp/splica_test_vp9_out.mp4",
+            "--resize",
+            "640x480",
         ])
         .output()
         .unwrap();
@@ -157,15 +162,13 @@ fn test_that_transcode_of_vp9_produces_clear_error() {
     // Should fail with a clear error, not silently produce wrong output
     assert!(
         !output.status.success(),
-        "expected transcode of VP9 to fail"
+        "expected process of VP9 with resize to fail"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
     let combined = format!("{stderr}{stdout}");
     assert!(
-        combined.contains("error")
-            || combined.contains("Error")
-            || combined.contains("unsupported"),
-        "expected error message, got: {combined}"
+        combined.contains("error") || combined.contains("Error") || combined.contains("H.264"),
+        "expected error message about H.264, got: {combined}"
     );
 }

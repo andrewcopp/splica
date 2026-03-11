@@ -124,7 +124,7 @@ fn test_that_probe_json_output_is_valid_json() {
 }
 
 #[test]
-fn test_that_convert_rejects_unsupported_output_format() {
+fn test_that_process_rejects_unsupported_output_format() {
     let dir = std::env::temp_dir().join("splica_test");
     std::fs::create_dir_all(&dir).unwrap();
     let input_path = dir.join("format_test_input.mp4");
@@ -135,7 +135,7 @@ fn test_that_convert_rejects_unsupported_output_format() {
 
     let output = splica_binary()
         .args([
-            "convert",
+            "process",
             "-i",
             input_path.to_str().unwrap(),
             "-o",
@@ -155,11 +155,42 @@ fn test_that_convert_rejects_unsupported_output_format() {
 }
 
 #[test]
-fn test_that_convert_accepts_mp4_output() {
+fn test_that_process_accepts_mp4_output() {
     let dir = std::env::temp_dir().join("splica_test");
     std::fs::create_dir_all(&dir).unwrap();
     let input_path = dir.join("format_ok_input.mp4");
     let output_path = dir.join("format_ok_output.mp4");
+
+    let source_mp4 = build_muxed_test_mp4();
+    std::fs::write(&input_path, &source_mp4).unwrap();
+
+    let output = splica_binary()
+        .args([
+            "process",
+            "-i",
+            input_path.to_str().unwrap(),
+            "-o",
+            output_path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "mp4 output should succeed. stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let _ = std::fs::remove_file(&input_path);
+    let _ = std::fs::remove_file(&output_path);
+}
+
+#[test]
+fn test_that_deprecated_convert_still_works() {
+    let dir = std::env::temp_dir().join("splica_test");
+    std::fs::create_dir_all(&dir).unwrap();
+    let input_path = dir.join("deprecated_convert_input.mp4");
+    let output_path = dir.join("deprecated_convert_output.mp4");
 
     let source_mp4 = build_muxed_test_mp4();
     std::fs::write(&input_path, &source_mp4).unwrap();
@@ -177,8 +208,13 @@ fn test_that_convert_accepts_mp4_output() {
 
     assert!(
         output.status.success(),
-        "mp4 output should succeed. stderr: {}",
+        "deprecated convert should still work. stderr: {}",
         String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("deprecated"),
+        "should show deprecation warning. stderr: {stderr}"
     );
 
     let _ = std::fs::remove_file(&input_path);

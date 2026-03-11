@@ -25,8 +25,12 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Copy streams from input to output without re-encoding.
-    Convert {
+    /// Process a media file: auto-selects stream copy or re-encode as needed.
+    ///
+    /// Uses stream copy when the input codecs are compatible with the output
+    /// container. Falls back to re-encoding when codecs are incompatible or
+    /// when encoding options (--resize, --bitrate, etc.) are specified.
+    Process {
         /// Input file path.
         #[arg(short, long)]
         input: PathBuf,
@@ -34,6 +38,33 @@ enum Commands {
         /// Output file path.
         #[arg(short, long)]
         output: PathBuf,
+
+        /// Target video bitrate (e.g., "2M", "1500k", or raw bps).
+        /// Implies re-encoding.
+        #[arg(long)]
+        bitrate: Option<String>,
+
+        /// Encoding speed/quality preset. Implies re-encoding.
+        #[arg(long)]
+        preset: Option<EncodePreset>,
+
+        /// Maximum frame rate hint for the encoder (e.g., 30, 60).
+        /// Implies re-encoding.
+        #[arg(long)]
+        max_fps: Option<f32>,
+
+        /// Resize video to WxH (e.g., "1280x720", "640x480").
+        /// Implies re-encoding.
+        #[arg(long)]
+        resize: Option<String>,
+
+        /// Aspect ratio handling when resizing (default: fit).
+        #[arg(long, default_value = "fit")]
+        aspect_mode: AspectModeArg,
+
+        /// Output format for results (text or json).
+        #[arg(long, default_value = "text")]
+        format: OutputFormat,
     },
 
     /// Inspect a media file and print track information.
@@ -76,7 +107,20 @@ enum Commands {
         output: PathBuf,
     },
 
-    /// Transcode video using the pipeline (demux → decode → encode → mux).
+    /// Deprecated: use `process` instead. Alias for stream-copy mode.
+    #[command(hide = true)]
+    Convert {
+        /// Input file path.
+        #[arg(short, long)]
+        input: PathBuf,
+
+        /// Output file path.
+        #[arg(short, long)]
+        output: PathBuf,
+    },
+
+    /// Deprecated: use `process` instead. Alias for re-encode mode.
+    #[command(hide = true)]
     Transcode {
         /// Input file path.
         #[arg(short, long)]
@@ -223,7 +267,27 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Convert { input, output } => convert(&input, &output),
+        Commands::Process {
+            input,
+            output,
+            bitrate,
+            preset,
+            max_fps,
+            resize,
+            aspect_mode,
+            format,
+        } => process(
+            &ProcessArgs {
+                input: &input,
+                output: &output,
+                bitrate: bitrate.as_deref(),
+                preset: preset.as_ref(),
+                max_fps,
+                resize: resize.as_deref(),
+                aspect_mode_arg: &aspect_mode,
+            },
+            &format,
+        ),
         Commands::Probe { file, format } => probe(&file, &format),
         Commands::Trim {
             input,
@@ -232,6 +296,21 @@ fn main() -> Result<()> {
             end,
         } => trim(&input, &output, start.as_deref(), end.as_deref()),
         Commands::ExtractAudio { input, output } => extract_audio(&input, &output),
+        Commands::Convert { input, output } => {
+            eprintln!("Warning: `convert` is deprecated, use `process` instead.");
+            process(
+                &ProcessArgs {
+                    input: &input,
+                    output: &output,
+                    bitrate: None,
+                    preset: None,
+                    max_fps: None,
+                    resize: None,
+                    aspect_mode_arg: &AspectModeArg::Fit,
+                },
+                &OutputFormat::Text,
+            )
+        }
         Commands::Transcode {
             input,
             output,
@@ -241,18 +320,21 @@ fn main() -> Result<()> {
             resize,
             aspect_mode,
             format,
-        } => transcode(
-            &TranscodeArgs {
-                input: &input,
-                output: &output,
-                bitrate: bitrate.as_deref(),
-                preset: &preset,
-                max_fps,
-                resize: resize.as_deref(),
-                aspect_mode_arg: &aspect_mode,
-            },
-            &format,
-        ),
+        } => {
+            eprintln!("Warning: `transcode` is deprecated, use `process` instead.");
+            process(
+                &ProcessArgs {
+                    input: &input,
+                    output: &output,
+                    bitrate: bitrate.as_deref(),
+                    preset: Some(&preset),
+                    max_fps,
+                    resize: resize.as_deref(),
+                    aspect_mode_arg: &aspect_mode,
+                },
+                &format,
+            )
+        }
     }
 }
 
@@ -385,6 +467,23 @@ fn detect_format(file: &mut (impl Read + Seek)) -> Result<ContainerFormat> {
 }
 
 /// Returns true if the output path has a WebM extension.
+/// Returns true if the video codec can be stream-copied into the target container.
+fn is_video_codec_compatible(codec: &Codec, output_is_webm: bool) -> bool {
+    match codec {
+        Codec::Video(vc) => {
+            if output_is_webm {
+                // WebM supports VP8, VP9, AV1
+                matches!(vc, VideoCodec::Av1)
+                    || matches!(vc, VideoCodec::Other(s) if s == "VP8" || s == "VP9")
+            } else {
+                // MP4 supports H.264, H.265, AV1
+                matches!(vc, VideoCodec::H264 | VideoCodec::H265 | VideoCodec::Av1)
+            }
+        }
+        Codec::Audio(_) => true, // audio compatibility is handled separately
+    }
+}
+
 fn is_webm_output(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
@@ -563,27 +662,60 @@ fn format_codec(codec: &splica_core::Codec) -> String {
 // convert
 // ---------------------------------------------------------------------------
 
-fn convert(input: &Path, output: &Path) -> Result<()> {
-    validate_output_format(output)?;
-    let mut demuxer = open_demuxer(input)?;
+// `convert` removed — the deprecated Convert command now routes through `process`.
 
-    let out_file = File::create(output)
+/// Stream copy path: copies packets without re-encoding.
+/// Returns TranscodeOutput with zero encode/decode counts.
+fn stream_copy(args: &ProcessArgs<'_>, json_mode: bool) -> Result<TranscodeOutput> {
+    let mut demuxer = open_demuxer(args.input)?;
+
+    let out_file = File::create(args.output)
         .into_diagnostic()
-        .wrap_err_with(|| format!("could not create output file '{}'", output.display()))?;
+        .wrap_err_with(|| format!("could not create output file '{}'", args.output.display()))?;
 
-    let mut muxer: Box<dyn Muxer> = if is_webm_output(output) {
+    let mut muxer: Box<dyn Muxer> = if is_webm_output(args.output) {
         Box::new(WebmMuxer::new(BufWriter::new(out_file)))
     } else {
         Box::new(Mp4Muxer::new(BufWriter::new(out_file)))
     };
 
-    let track_count = demuxer.tracks().len();
+    let tracks = demuxer.tracks().to_vec();
+    let track_count = tracks.len();
+
+    // Collect audio track info for JSON output
+    let audio_tracks: Vec<TranscodeAudioInfo> = tracks
+        .iter()
+        .filter(|t| t.kind == TrackKind::Audio)
+        .map(|t| {
+            let codec = format_codec(&t.codec);
+            let sample_rate = t.audio.as_ref().map(|a| a.sample_rate).unwrap_or(0);
+            let channels = t
+                .audio
+                .as_ref()
+                .and_then(|a| a.channel_layout.map(|cl| cl.channel_count()));
+            TranscodeAudioInfo {
+                codec,
+                sample_rate,
+                channels,
+                mode: "pass_through".to_string(),
+            }
+        })
+        .collect();
+
     for i in 0..track_count {
         let info = demuxer.tracks()[i].clone();
         muxer
             .add_track(&info)
             .into_diagnostic()
             .wrap_err_with(|| format!("failed to add track {i}"))?;
+    }
+
+    if !json_mode {
+        eprintln!(
+            "Processing {} → {} (stream copy)",
+            args.input.display(),
+            args.output.display()
+        );
     }
 
     let mut packet_count: u64 = 0;
@@ -604,12 +736,11 @@ fn convert(input: &Path, output: &Path) -> Result<()> {
         .into_diagnostic()
         .wrap_err("failed to finalize output")?;
 
-    eprintln!(
-        "Copied {packet_count} packets across {track_count} tracks to {}",
-        output.display()
-    );
+    if !json_mode {
+        eprintln!("  Done. Copied {packet_count} packets across {track_count} tracks.");
+    }
 
-    Ok(())
+    Ok((packet_count, 0, 0, packet_count, audio_tracks))
 }
 
 // ---------------------------------------------------------------------------
@@ -860,21 +991,21 @@ fn parse_resize(s: &str) -> Result<(u32, u32)> {
     Ok((w, h))
 }
 
-struct TranscodeArgs<'a> {
+struct ProcessArgs<'a> {
     input: &'a Path,
     output: &'a Path,
     bitrate: Option<&'a str>,
-    preset: &'a EncodePreset,
+    preset: Option<&'a EncodePreset>,
     max_fps: Option<f32>,
     resize: Option<&'a str>,
     aspect_mode_arg: &'a AspectModeArg,
 }
 
-fn transcode(args: &TranscodeArgs<'_>, format: &OutputFormat) -> Result<()> {
+fn process(args: &ProcessArgs<'_>, format: &OutputFormat) -> Result<()> {
     let json_mode = matches!(format, OutputFormat::Json);
 
     // In JSON mode, catch errors and emit structured JSON instead of miette output
-    let result = transcode_inner(args, json_mode);
+    let result = process_inner(args, json_mode);
 
     if json_mode {
         match result {
@@ -929,18 +1060,27 @@ type DemuxerWithConfigs = (
     Vec<AudioCodecConfig>,
 );
 
-fn transcode_inner(args: &TranscodeArgs<'_>, json_mode: bool) -> Result<TranscodeOutput> {
+fn process_inner(args: &ProcessArgs<'_>, json_mode: bool) -> Result<TranscodeOutput> {
     validate_output_format(args.output)?;
+
+    // Determine if user explicitly requested re-encoding via any encoding option
+    let user_requested_reencode = args.bitrate.is_some()
+        || args.preset.is_some()
+        || args.max_fps.is_some()
+        || args.resize.is_some();
+
+    let effective_preset = args.preset.unwrap_or(&EncodePreset::Medium);
+
     let bitrate_bps = match args.bitrate {
         Some(s) => parse_bitrate(s)?,
-        None => match args.preset {
+        None => match effective_preset {
             EncodePreset::Fast => 500_000,     // 500 kbps
             EncodePreset::Medium => 1_000_000, // 1 Mbps
             EncodePreset::Slow => 2_000_000,   // 2 Mbps
         },
     };
 
-    let frame_rate_hint = args.max_fps.unwrap_or(match args.preset {
+    let frame_rate_hint = args.max_fps.unwrap_or(match effective_preset {
         EncodePreset::Fast => 30.0,
         EncodePreset::Medium => 30.0,
         EncodePreset::Slow => 60.0,
@@ -1059,9 +1199,28 @@ fn transcode_inner(args: &TranscodeArgs<'_>, json_mode: bool) -> Result<Transcod
         })
         .collect();
 
+    // Check if any video codec is incompatible with the output container
+    let video_needs_reencode = demuxer
+        .tracks()
+        .iter()
+        .filter(|t| t.kind == TrackKind::Video)
+        .any(|t| !is_video_codec_compatible(&t.codec, output_is_webm));
+
+    let any_audio_needs_transcode = audio_needs_transcode.iter().any(|&b| b);
+
+    // Decide: stream copy vs re-encode
+    // Stream copy when: no user encoding flags, all codecs compatible
+    let use_stream_copy =
+        !user_requested_reencode && !video_needs_reencode && !any_audio_needs_transcode;
+
+    if use_stream_copy {
+        return stream_copy(args, json_mode);
+    }
+
+    // Re-encode path: we need H.264 video tracks with avcc config to decode+encode
     if video_track_configs.is_empty() {
         return Err(miette::miette!(
-            "no H.264 video tracks found in '{}' — transcode currently supports H.264 only",
+            "no H.264 video tracks found in '{}' — re-encoding currently supports H.264 video only",
             args.input.display()
         ));
     }
@@ -1220,21 +1379,21 @@ fn transcode_inner(args: &TranscodeArgs<'_>, json_mode: bool) -> Result<Transcod
         .into_diagnostic()
         .wrap_err("failed to build transcode pipeline")?;
 
-    let preset_name = match args.preset {
+    let preset_name = match effective_preset {
         EncodePreset::Fast => "fast",
         EncodePreset::Medium => "medium",
         EncodePreset::Slow => "slow",
     };
     if let Some(resize_str) = args.resize {
         eprintln!(
-            "Transcoding {} → {} (H.264, {} kbps, preset: {preset_name}, resize: {resize_str})",
+            "Processing {} → {} (re-encode, H.264, {} kbps, preset: {preset_name}, resize: {resize_str})",
             args.input.display(),
             args.output.display(),
             bitrate_bps / 1000
         );
     } else {
         eprintln!(
-            "Transcoding {} → {} (H.264, {} kbps, preset: {preset_name})",
+            "Processing {} → {} (re-encode, H.264, {} kbps, preset: {preset_name})",
             args.input.display(),
             args.output.display(),
             bitrate_bps / 1000
