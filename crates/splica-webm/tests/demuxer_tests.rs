@@ -377,10 +377,11 @@ fn test_that_streaming_read_yields_all_packets() {
     assert_eq!(count, 10);
 }
 
+/// A cluster definition: (cluster_timestamp, frames).
+type ClusterDef<'a> = (u64, Vec<(i16, bool, &'a [u8])>);
+
 /// Builds a WebM file with multiple clusters, each with its own timestamp.
-/// `clusters` is a list of (cluster_timestamp, frames) where each frame is
-/// (relative_ts, is_keyframe, data).
-fn build_multi_cluster_webm(clusters: &[(u64, Vec<(i16, bool, &[u8])>)]) -> Vec<u8> {
+fn build_multi_cluster_webm(clusters: &[ClusterDef<'_>]) -> Vec<u8> {
     let ebml_body = [
         uint_element(0x4286, 1),        // EBMLVersion
         string_element(0x4282, "webm"), // DocType
