@@ -139,6 +139,36 @@ fn test_that_probe_reports_correct_vp9_resolution() {
 }
 
 // ---------------------------------------------------------------------------
+// MP4 AV1 probe
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_that_probe_reports_av1_codec_for_real_mp4() {
+    let output = splica_binary()
+        .args(["probe", &fixture_path("bigbuckbunny_av1.mp4")])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("AV1"), "expected AV1 in output: {stdout}");
+}
+
+#[test]
+fn test_that_probe_reports_correct_av1_resolution() {
+    let output = splica_binary()
+        .args(["probe", &fixture_path("bigbuckbunny_av1.mp4")])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("640x360"),
+        "expected 640x360 in output: {stdout}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Color space
 // ---------------------------------------------------------------------------
 
