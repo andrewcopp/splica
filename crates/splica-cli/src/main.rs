@@ -184,6 +184,39 @@ struct ErrorResult {
     message: String,
 }
 
+/// Classifies an error into an error_kind string and exit code.
+///
+/// Returns `(error_kind, exit_code)` based on the error message content.
+fn classify_error(error: &miette::Report) -> (&'static str, i32) {
+    let msg = format!("{error:?}");
+
+    // I/O errors (file not found, permission denied, etc.) — bad input
+    if msg.contains("could not open file")
+        || msg.contains("could not create output file")
+        || msg.contains("unsupported output format")
+        || msg.contains("unsupported container format")
+        || msg.contains("no extension")
+        || msg.contains("no H.264 video tracks")
+        || msg.contains("invalid resize")
+        || msg.contains("invalid bitrate")
+        || msg.contains("invalid time")
+    {
+        return ("bad_input", exit_code::BAD_INPUT);
+    }
+
+    // Encoder/decoder/pipeline internal failures — may be retryable
+    if msg.contains("transcode failed")
+        || msg.contains("encode failed")
+        || msg.contains("decode failed")
+        || msg.contains("failed to build transcode pipeline")
+    {
+        return ("internal_error", exit_code::INTERNAL);
+    }
+
+    // Default to bad_input for unrecognized errors
+    ("bad_input", exit_code::BAD_INPUT)
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
@@ -864,13 +897,14 @@ fn transcode(
                 Ok(())
             }
             Err(e) => {
+                let (error_kind, code) = classify_error(&e);
                 let error_json = ErrorResult {
                     status: "error".to_string(),
-                    error_kind: "bad_input".to_string(),
+                    error_kind: error_kind.to_string(),
                     message: format!("{e}"),
                 };
                 println!("{}", serde_json::to_string_pretty(&error_json).unwrap());
-                std::process::exit(exit_code::BAD_INPUT);
+                std::process::exit(code);
             }
         }
     } else {
