@@ -123,6 +123,18 @@ enum Commands {
         output: PathBuf,
     },
 
+    /// Translate an ffmpeg command into the equivalent splica command.
+    ///
+    /// Accepts the ffmpeg command as trailing arguments. The "ffmpeg" prefix
+    /// is optional:
+    ///   splica migrate ffmpeg -i in.mp4 out.webm
+    ///   splica migrate -i in.mp4 out.webm
+    Migrate {
+        /// The ffmpeg command to translate.
+        #[arg(trailing_var_arg = true)]
+        command: Vec<String>,
+    },
+
     /// Deprecated: use `process` instead. Alias for stream-copy mode.
     #[command(hide = true)]
     Convert {
@@ -216,6 +228,7 @@ fn main() -> Result<()> {
         Commands::ExtractAudio { input, output } => {
             commands::extract_audio::extract_audio(&input, &output)
         }
+        Commands::Migrate { command } => commands::migrate::migrate(&command),
         Commands::Convert { input, output } => {
             eprintln!("Warning: `convert` is deprecated, use `process` instead.");
             commands::process::process(

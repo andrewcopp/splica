@@ -1,4 +1,5 @@
 pub(crate) mod extract_audio;
+pub(crate) mod migrate;
 pub(crate) mod probe;
 pub(crate) mod process;
 pub(crate) mod trim;
