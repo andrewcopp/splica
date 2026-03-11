@@ -10,7 +10,7 @@ use rav1e::prelude::*;
 use splica_core::error::EncodeError;
 use splica_core::media::{
     ColorPrimaries, ColorRange, ColorSpace, Frame, MatrixCoefficients, Packet, PixelFormat,
-    TrackIndex, TransferCharacteristics, VideoFrame,
+    QualityTarget, TrackIndex, TransferCharacteristics, VideoFrame,
 };
 use splica_core::Encoder;
 
@@ -88,6 +88,26 @@ impl Av1EncoderBuilder {
     /// Sets the quantizer for constant quality mode (0-255).
     pub fn quantizer(mut self, q: u8) -> Self {
         self.quantizer = q;
+        self
+    }
+
+    /// Sets encoder quality from a `QualityTarget`.
+    ///
+    /// - `Bitrate(bps)` → enables rate control mode with the given bitrate.
+    /// - `Crf(crf)` → maps CRF (0–51) to rav1e's quantizer (0–255) and
+    ///   enables constant quality mode (bitrate = 0).
+    pub fn quality(mut self, target: QualityTarget) -> Self {
+        match target {
+            QualityTarget::Bitrate(bps) => {
+                self.bitrate_bps = bps;
+            }
+            QualityTarget::Crf(crf) => {
+                // Map CRF 0–51 → quantizer 0–255 (linear scale).
+                let crf = crf.min(QualityTarget::MAX_CRF);
+                self.quantizer = (crf as u16 * 255 / 51) as u8;
+                self.bitrate_bps = 0; // constant quality mode
+            }
+        }
         self
     }
 

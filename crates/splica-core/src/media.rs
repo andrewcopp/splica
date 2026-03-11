@@ -87,6 +87,45 @@ impl ResourceBudget {
 }
 
 // ---------------------------------------------------------------------------
+// Quality target
+// ---------------------------------------------------------------------------
+
+/// Encoder quality target: either perceptual quality (CRF) or explicit bitrate.
+///
+/// This is the shared type that the CLI passes through to codec-specific
+/// encoders. Each encoder maps it to its native quality controls:
+/// - H.264 (openh264): CRF is mapped to a bitrate estimate (openh264 lacks
+///   native CRF/QP control via its safe API).
+/// - AV1 (rav1e): CRF is mapped to the rav1e quantizer (0–255).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum QualityTarget {
+    /// Constant Rate Factor — perceptual quality target.
+    ///
+    /// Range: 0 (best quality) to 51 (smallest file). Default: 23.
+    /// Matches the x264 CRF scale that most users are familiar with.
+    Crf(u8),
+    /// Target bitrate in bits per second.
+    Bitrate(u32),
+}
+
+impl QualityTarget {
+    /// Maximum CRF value (worst quality, smallest file).
+    pub const MAX_CRF: u8 = 51;
+
+    /// Default CRF value (visually transparent for most content).
+    pub const DEFAULT_CRF: u8 = 23;
+
+    /// Validates a CRF value is in the 0–51 range.
+    pub fn crf(value: u8) -> Option<Self> {
+        if value > Self::MAX_CRF {
+            None
+        } else {
+            Some(Self::Crf(value))
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Container format
 // ---------------------------------------------------------------------------
 
@@ -921,5 +960,25 @@ mod tests {
             result,
             Err(VideoFrameError::StrideTooSmall { .. })
         ));
+    }
+
+    #[test]
+    fn test_that_quality_target_crf_accepts_valid_range() {
+        assert_eq!(QualityTarget::crf(0), Some(QualityTarget::Crf(0)));
+        assert_eq!(QualityTarget::crf(23), Some(QualityTarget::Crf(23)));
+        assert_eq!(QualityTarget::crf(51), Some(QualityTarget::Crf(51)));
+    }
+
+    #[test]
+    fn test_that_quality_target_crf_rejects_out_of_range() {
+        assert_eq!(QualityTarget::crf(52), None);
+        assert_eq!(QualityTarget::crf(255), None);
+    }
+
+    #[test]
+    fn test_that_quality_target_bitrate_stores_value() {
+        let qt = QualityTarget::Bitrate(2_000_000);
+
+        assert_eq!(qt, QualityTarget::Bitrate(2_000_000));
     }
 }

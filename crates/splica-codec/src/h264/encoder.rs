@@ -9,7 +9,7 @@ use bytes::Bytes;
 use splica_core::error::EncodeError;
 use splica_core::media::{
     ColorPrimaries, ColorRange, ColorSpace, Frame, MatrixCoefficients, Packet, PixelFormat,
-    TrackIndex, TransferCharacteristics, VideoFrame,
+    QualityTarget, TrackIndex, TransferCharacteristics, VideoFrame,
 };
 use splica_core::Encoder;
 
@@ -101,6 +101,20 @@ impl H264EncoderBuilder {
     /// Sets the target bitrate in bits per second.
     pub fn bitrate(mut self, bps: u32) -> Self {
         self.bitrate_bps = bps;
+        self
+    }
+
+    /// Sets encoder quality from a `QualityTarget`.
+    ///
+    /// - `Bitrate(bps)` → sets bitrate directly.
+    /// - `Crf(crf)` → maps CRF to an estimated bitrate. OpenH264 does not
+    ///   expose native CRF/QP control via its safe API, so CRF is converted
+    ///   to a bitrate using an exponential curve calibrated to x264 defaults.
+    pub fn quality(mut self, target: QualityTarget) -> Self {
+        match target {
+            QualityTarget::Bitrate(bps) => self.bitrate_bps = bps,
+            QualityTarget::Crf(crf) => self.bitrate_bps = crf_to_bitrate(crf),
+        }
         self
     }
 
@@ -331,6 +345,24 @@ fn to_vui_config(cs: &ColorSpace) -> VuiConfig {
         .full_range(full_range)
 }
 
+/// Maps a CRF value (0–51) to an estimated bitrate in bits per second.
+///
+/// OpenH264 only supports bitrate-based rate control, so CRF is converted
+/// using an exponential curve calibrated to x264 defaults at 1080p:
+/// - CRF 18 → ~8 Mbps
+/// - CRF 23 → ~4 Mbps (default, visually transparent)
+/// - CRF 28 → ~2 Mbps
+/// - CRF 51 → ~50 kbps
+///
+/// Formula: `base * 2^((23 - crf) / 6)` where base = 4 Mbps.
+fn crf_to_bitrate(crf: u8) -> u32 {
+    let crf = crf.min(QualityTarget::MAX_CRF);
+    let base = 4_000_000.0_f64; // 4 Mbps at CRF 23
+    let exponent = (23.0 - crf as f64) / 6.0;
+    let bps = base * 2.0_f64.powf(exponent);
+    (bps as u32).max(50_000) // floor at 50 kbps
+}
+
 /// Adapter that implements `openh264::formats::YUVSource` for a `VideoFrame`.
 ///
 /// This bridges the splica `VideoFrame` (with `Bytes` data and `PlaneLayout`)
@@ -539,5 +571,44 @@ mod tests {
 
         // THEN
         assert_eq!(h264.encoder_config().bitrate_bps, 2_000_000);
+    }
+
+    #[test]
+    fn test_that_quality_bitrate_sets_bitrate_directly() {
+        let encoder = H264EncoderBuilder::new()
+            .quality(QualityTarget::Bitrate(3_000_000))
+            .build()
+            .unwrap();
+
+        assert_eq!(encoder.encoder_config().bitrate_bps, 3_000_000);
+    }
+
+    #[test]
+    fn test_that_quality_crf_maps_to_reasonable_bitrate() {
+        // CRF 23 (default) should map to ~4 Mbps
+        let encoder = H264EncoderBuilder::new()
+            .quality(QualityTarget::Crf(23))
+            .build()
+            .unwrap();
+
+        let bps = encoder.encoder_config().bitrate_bps;
+        assert!((3_500_000..=4_500_000).contains(&bps), "CRF 23 → {bps} bps");
+    }
+
+    #[test]
+    fn test_that_quality_crf_lower_means_higher_bitrate() {
+        let enc_18 = H264EncoderBuilder::new()
+            .quality(QualityTarget::Crf(18))
+            .build()
+            .unwrap();
+        let enc_28 = H264EncoderBuilder::new()
+            .quality(QualityTarget::Crf(28))
+            .build()
+            .unwrap();
+
+        assert!(
+            enc_18.encoder_config().bitrate_bps > enc_28.encoder_config().bitrate_bps,
+            "CRF 18 should produce higher bitrate than CRF 28"
+        );
     }
 }

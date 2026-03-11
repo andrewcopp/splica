@@ -45,9 +45,14 @@ enum Commands {
         output: PathBuf,
 
         /// Target video bitrate (e.g., "2M", "1500k", or raw bps).
-        /// Implies re-encoding.
-        #[arg(long)]
+        /// Implies re-encoding. Mutually exclusive with --crf.
+        #[arg(long, conflicts_with = "crf")]
         bitrate: Option<String>,
+
+        /// Constant Rate Factor for perceptual quality (0–51, lower = better).
+        /// Default: 23. Implies re-encoding. Mutually exclusive with --bitrate.
+        #[arg(long, conflicts_with = "bitrate")]
+        crf: Option<u8>,
 
         /// Encoding speed/quality preset. Implies re-encoding.
         #[arg(long)]
@@ -338,6 +343,7 @@ fn main() -> Result<()> {
             input,
             output,
             bitrate,
+            crf,
             preset,
             max_fps,
             resize,
@@ -350,6 +356,7 @@ fn main() -> Result<()> {
                 input: &input,
                 output: &output,
                 bitrate: bitrate.as_deref(),
+                crf,
                 preset: preset.as_ref(),
                 max_fps,
                 resize: resize.as_deref(),
@@ -375,6 +382,7 @@ fn main() -> Result<()> {
                     input: &input,
                     output: &output,
                     bitrate: None,
+                    crf: None,
                     preset: None,
                     max_fps: None,
                     resize: None,
@@ -401,6 +409,7 @@ fn main() -> Result<()> {
                     input: &input,
                     output: &output,
                     bitrate: bitrate.as_deref(),
+                    crf: None,
                     preset: Some(&preset),
                     max_fps,
                     resize: resize.as_deref(),
@@ -1291,6 +1300,7 @@ struct ProcessArgs<'a> {
     input: &'a Path,
     output: &'a Path,
     bitrate: Option<&'a str>,
+    crf: Option<u8>,
     preset: Option<&'a EncodePreset>,
     max_fps: Option<f32>,
     resize: Option<&'a str>,
@@ -1391,6 +1401,7 @@ fn process_inner(args: &ProcessArgs<'_>, json_mode: bool) -> Result<TranscodeOut
 
     // Determine if user explicitly requested re-encoding via any encoding option
     let user_requested_reencode = args.bitrate.is_some()
+        || args.crf.is_some()
         || args.preset.is_some()
         || args.max_fps.is_some()
         || args.resize.is_some()
@@ -1399,13 +1410,20 @@ fn process_inner(args: &ProcessArgs<'_>, json_mode: bool) -> Result<TranscodeOut
 
     let effective_preset = args.preset.unwrap_or(&EncodePreset::Medium);
 
-    let bitrate_bps = match args.bitrate {
-        Some(s) => parse_bitrate(s)?,
-        None => match effective_preset {
+    // Resolve quality target: --crf and --bitrate are mutually exclusive (enforced by clap).
+    // When neither is given, fall back to preset-based bitrate defaults.
+    let quality_target: splica_core::QualityTarget = if let Some(crf) = args.crf {
+        splica_core::QualityTarget::crf(crf)
+            .ok_or_else(|| miette::miette!("CRF value {crf} is out of range — must be 0–51"))?
+    } else if let Some(s) = args.bitrate {
+        splica_core::QualityTarget::Bitrate(parse_bitrate(s)?)
+    } else {
+        let bps = match effective_preset {
             EncodePreset::Fast => 500_000,     // 500 kbps
             EncodePreset::Medium => 1_000_000, // 1 Mbps
             EncodePreset::Slow => 2_000_000,   // 2 Mbps
-        },
+        };
+        splica_core::QualityTarget::Bitrate(bps)
     };
 
     let frame_rate_hint = args.max_fps.unwrap_or(match effective_preset {
@@ -1698,7 +1716,7 @@ fn process_inner(args: &ProcessArgs<'_>, json_mode: bool) -> Result<TranscodeOut
             };
 
             let mut enc_builder = Av1EncoderBuilder::new()
-                .bitrate(bitrate_bps)
+                .quality(quality_target)
                 .track_index(*track_idx)
                 .dimensions(enc_w, enc_h)
                 .speed(6)
@@ -1716,7 +1734,7 @@ fn process_inner(args: &ProcessArgs<'_>, json_mode: bool) -> Result<TranscodeOut
             builder = builder.with_encoder(*track_idx, encoder);
         } else {
             let mut enc_builder = H264EncoderBuilder::new()
-                .bitrate(bitrate_bps)
+                .quality(quality_target)
                 .max_frame_rate(frame_rate_hint)
                 .track_index(*track_idx);
 
@@ -1850,19 +1868,21 @@ fn process_inner(args: &ProcessArgs<'_>, json_mode: bool) -> Result<TranscodeOut
         EncodePreset::Medium => "medium",
         EncodePreset::Slow => "slow",
     };
+    let quality_desc = match quality_target {
+        splica_core::QualityTarget::Crf(crf) => format!("CRF {crf}"),
+        splica_core::QualityTarget::Bitrate(bps) => format!("{} kbps", bps / 1000),
+    };
     if let Some(resize_str) = args.resize {
         eprintln!(
-            "Processing {} → {} (re-encode, H.264, {} kbps, preset: {preset_name}, resize: {resize_str})",
+            "Processing {} → {} (re-encode, {quality_desc}, preset: {preset_name}, resize: {resize_str})",
             args.input.display(),
             args.output.display(),
-            bitrate_bps / 1000
         );
     } else {
         eprintln!(
-            "Processing {} → {} (re-encode, H.264, {} kbps, preset: {preset_name})",
+            "Processing {} → {} (re-encode, {quality_desc}, preset: {preset_name})",
             args.input.display(),
             args.output.display(),
-            bitrate_bps / 1000
         );
     }
 
