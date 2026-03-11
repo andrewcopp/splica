@@ -119,6 +119,111 @@ mod wasm_js_types {
         }
     }
 
+    /// A compressed audio packet with metadata for WebCodecs `EncodedAudioChunk`.
+    #[wasm_bindgen]
+    pub struct WasmAudioPacket {
+        data: Vec<u8>,
+        timestamp_us: f64,
+        duration_us: f64,
+        is_keyframe: bool,
+    }
+
+    impl WasmAudioPacket {
+        /// Creates a new `WasmAudioPacket` from raw fields.
+        ///
+        /// Use `-1.0` for `duration_us` when the duration is unknown.
+        pub fn new(data: Vec<u8>, timestamp_us: f64, duration_us: f64, is_keyframe: bool) -> Self {
+            Self {
+                data,
+                timestamp_us,
+                duration_us,
+                is_keyframe,
+            }
+        }
+    }
+
+    #[wasm_bindgen]
+    impl WasmAudioPacket {
+        /// The compressed audio data.
+        #[wasm_bindgen(getter)]
+        pub fn data(&self) -> js_sys::Uint8Array {
+            js_sys::Uint8Array::from(self.data.as_slice())
+        }
+
+        /// Presentation timestamp in microseconds.
+        #[wasm_bindgen(getter, js_name = "timestampUs")]
+        pub fn timestamp_us(&self) -> f64 {
+            self.timestamp_us
+        }
+
+        /// Duration in microseconds, or -1 if unknown.
+        #[wasm_bindgen(getter, js_name = "durationUs")]
+        pub fn duration_us(&self) -> f64 {
+            self.duration_us
+        }
+
+        /// Whether this packet is a keyframe.
+        #[wasm_bindgen(getter, js_name = "isKeyframe")]
+        pub fn is_keyframe(&self) -> bool {
+            self.is_keyframe
+        }
+    }
+
+    /// WebCodecs-compatible audio decoder configuration.
+    #[wasm_bindgen]
+    pub struct WasmAudioDecoderConfig {
+        codec: String,
+        description: Vec<u8>,
+        sample_rate: u32,
+        number_of_channels: u32,
+    }
+
+    impl WasmAudioDecoderConfig {
+        /// Creates a new `WasmAudioDecoderConfig` from raw fields.
+        pub fn new(
+            codec: String,
+            description: Vec<u8>,
+            sample_rate: u32,
+            number_of_channels: u32,
+        ) -> Self {
+            Self {
+                codec,
+                description,
+                sample_rate,
+                number_of_channels,
+            }
+        }
+    }
+
+    #[wasm_bindgen]
+    impl WasmAudioDecoderConfig {
+        /// WebCodecs codec string (e.g., `"mp4a.40.2"` for AAC-LC, `"opus"`).
+        #[wasm_bindgen(getter)]
+        pub fn codec(&self) -> String {
+            self.codec.clone()
+        }
+
+        /// Raw codec-specific data for `AudioDecoderConfig.description`.
+        ///
+        /// For AAC this is the esds box contents; for Opus this is the OpusHead.
+        #[wasm_bindgen(getter)]
+        pub fn description(&self) -> js_sys::Uint8Array {
+            js_sys::Uint8Array::from(self.description.as_slice())
+        }
+
+        /// Sample rate in Hz.
+        #[wasm_bindgen(getter, js_name = "sampleRate")]
+        pub fn sample_rate(&self) -> u32 {
+            self.sample_rate
+        }
+
+        /// Number of audio channels.
+        #[wasm_bindgen(getter, js_name = "numberOfChannels")]
+        pub fn number_of_channels(&self) -> u32 {
+            self.number_of_channels
+        }
+    }
+
     /// WebCodecs-compatible video decoder configuration.
     #[wasm_bindgen]
     pub struct WasmVideoDecoderConfig {
@@ -174,4 +279,6 @@ mod wasm_js_types {
 }
 
 #[cfg(feature = "wasm")]
-pub use wasm_js_types::{WasmVideoDecoderConfig, WasmVideoPacket};
+pub use wasm_js_types::{
+    WasmAudioDecoderConfig, WasmAudioPacket, WasmVideoDecoderConfig, WasmVideoPacket,
+};

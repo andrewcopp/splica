@@ -8,13 +8,15 @@ use std::io::Cursor;
 use wasm_bindgen::prelude::*;
 
 use splica_core::wasm_types::{
-    audio_track_info_json, video_track_info_json, WasmVideoDecoderConfig, WasmVideoPacket,
+    audio_track_info_json, video_track_info_json, WasmAudioDecoderConfig, WasmAudioPacket,
+    WasmVideoDecoderConfig, WasmVideoPacket,
 };
-use splica_core::{Demuxer, SeekMode, Seekable, Timestamp, TrackKind};
+use splica_core::{AudioCodec, Codec, Demuxer, SeekMode, Seekable, Timestamp, TrackKind};
 
 use crate::boxes::stsd::CodecConfig;
 use crate::codec_strings::{
     build_av1_codec_string, build_avc_codec_string, build_hevc_codec_string,
+    extract_aac_audio_object_type,
 };
 use crate::Mp4Demuxer;
 
@@ -238,5 +240,146 @@ impl WasmMp4Demuxer {
                 Err(e) => return Err(JsValue::from_str(&e.to_string())),
             }
         }
+    }
+
+    /// Reads the next audio packet, skipping video packets.
+    ///
+    /// Returns a `WasmAudioPacket` with the compressed data, presentation
+    /// timestamp in microseconds, duration, and keyframe flag. Returns null
+    /// at end-of-stream or if no audio track is present.
+    #[wasm_bindgen(js_name = "readAudioPacket")]
+    pub fn read_audio_packet(&mut self) -> Result<Option<WasmAudioPacket>, JsValue> {
+        let audio_index = self
+            .inner
+            .tracks()
+            .iter()
+            .find(|t| t.kind == TrackKind::Audio)
+            .map(|t| t.index);
+
+        let audio_index = match audio_index {
+            Some(idx) => idx,
+            None => return Ok(None),
+        };
+
+        loop {
+            match self.inner.read_packet() {
+                Ok(Some(packet)) => {
+                    if packet.track_index == audio_index {
+                        let timestamp_us = packet.pts.as_seconds_f64() * 1_000_000.0;
+                        return Ok(Some(WasmAudioPacket::new(
+                            packet.data.to_vec(),
+                            timestamp_us,
+                            -1.0,
+                            packet.is_keyframe,
+                        )));
+                    }
+                    // Skip non-audio packets
+                }
+                Ok(None) => return Ok(None),
+                Err(e) => return Err(JsValue::from_str(&e.to_string())),
+            }
+        }
+    }
+
+    /// Returns a WebCodecs-compatible `AudioDecoderConfig`, or null if no
+    /// audio track is present.
+    ///
+    /// Supports AAC audio tracks. Returns an error if the audio track uses
+    /// an unsupported or unknown codec.
+    ///
+    /// The returned config contains:
+    /// - `codec`: WebCodecs codec string (e.g., `"mp4a.40.2"`)
+    /// - `description`: raw esds bytes for `AudioDecoderConfig.description`
+    /// - `sampleRate`: audio sample rate in Hz
+    /// - `numberOfChannels`: number of audio channels
+    #[wasm_bindgen(js_name = "audioDecoderConfig")]
+    pub fn audio_decoder_config(&self) -> Result<Option<WasmAudioDecoderConfig>, JsValue> {
+        let audio_track = self
+            .inner
+            .tracks()
+            .iter()
+            .find(|t| t.kind == TrackKind::Audio);
+
+        let track = match audio_track {
+            Some(t) => t,
+            None => return Ok(None),
+        };
+
+        let config = self.inner.codec_config(track.index);
+        match config {
+            Some(CodecConfig::Mp4a {
+                sample_rate,
+                channel_count,
+                esds,
+            }) => {
+                let aot = extract_aac_audio_object_type(esds);
+                let codec_string = format!("mp4a.40.{aot}");
+                Ok(Some(WasmAudioDecoderConfig::new(
+                    codec_string,
+                    esds.to_vec(),
+                    *sample_rate,
+                    u32::from(*channel_count),
+                )))
+            }
+            Some(CodecConfig::Avc1 { .. })
+            | Some(CodecConfig::Hev1 { .. })
+            | Some(CodecConfig::Av1 { .. }) => Err(JsValue::from_str(
+                "audio track has video codec config (unexpected)",
+            )),
+            Some(CodecConfig::Unknown(name)) => Err(JsValue::from_str(&format!(
+                "unsupported audio codec: {name}"
+            ))),
+            None => {
+                // Fallback: check codec from TrackInfo
+                match &track.codec {
+                    Codec::Audio(AudioCodec::Aac) => Err(JsValue::from_str(
+                        "AAC audio track has no codec configuration",
+                    )),
+                    Codec::Audio(AudioCodec::Opus) => {
+                        Err(JsValue::from_str("Opus in MP4 is not yet supported"))
+                    }
+                    _ => Err(JsValue::from_str("audio track has no codec configuration")),
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_that_read_audio_packet_returns_none_for_video_only_mp4() {
+        // GIVEN — an MP4 with only a video track
+        let mp4_data =
+            std::fs::read("../../tests/fixtures/bigbuckbunny_h264.mp4").expect("fixture missing");
+        let mut demuxer = WasmMp4Demuxer {
+            inner: Mp4Demuxer::open(Cursor::new(mp4_data)).expect("failed to open mp4"),
+        };
+
+        // WHEN
+        let result = demuxer.read_audio_packet();
+
+        // THEN — returns Ok(None) since there is no audio track
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none());
+    }
+
+    #[test]
+    fn test_that_audio_decoder_config_returns_none_for_video_only_mp4() {
+        // GIVEN — an MP4 with only a video track
+        let mp4_data =
+            std::fs::read("../../tests/fixtures/bigbuckbunny_h264.mp4").expect("fixture missing");
+        let demuxer = WasmMp4Demuxer {
+            inner: Mp4Demuxer::open(Cursor::new(mp4_data)).expect("failed to open mp4"),
+        };
+
+        // WHEN
+        let result = demuxer.audio_decoder_config();
+
+        // THEN — returns Ok(None) since there is no audio track
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none());
     }
 }

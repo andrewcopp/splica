@@ -91,6 +91,86 @@ pub(crate) fn build_av1_codec_string(av1c: &[u8]) -> String {
     format!("av01.{profile}.{level:02}{tier}.{bit_depth:02}")
 }
 
+/// Extracts the AAC Audio Object Type from esds box data.
+///
+/// The esds box contains an ES_Descriptor with a DecoderConfigDescriptor
+/// that holds an AudioSpecificConfig. The first 5 bits of the
+/// AudioSpecificConfig encode the Audio Object Type:
+/// - 2 = AAC-LC (most common, codec string "mp4a.40.2")
+/// - 5 = SBR / HE-AAC (codec string "mp4a.40.5")
+/// - 29 = PS / HE-AAC v2 (codec string "mp4a.40.29")
+///
+/// Falls back to 2 (AAC-LC) if the esds data is too short to parse.
+pub(crate) fn extract_aac_audio_object_type(esds: &[u8]) -> u8 {
+    // Walk the esds looking for DecoderSpecificInfo (tag 0x05)
+    // The esds structure is:
+    //   version(4) + ES_Descriptor(tag 0x03) {
+    //     ES_ID(2) + flags(1) + DecoderConfigDescriptor(tag 0x04) {
+    //       objectTypeIndication(1) + streamType(1) + bufferSizeDB(3) +
+    //       maxBitrate(4) + avgBitrate(4) + DecoderSpecificInfo(tag 0x05) {
+    //         AudioSpecificConfig bytes...
+    //       }
+    //     }
+    //   }
+    let mut pos = 0;
+
+    // Skip esds full box header (version + flags = 4 bytes) if present
+    if esds.len() >= 4 {
+        pos = 4;
+    }
+
+    // Search for tag 0x05 (DecoderSpecificInfo)
+    while pos < esds.len() {
+        let tag = esds[pos];
+        pos += 1;
+
+        // Read variable-length size (1-4 bytes, each with MSB continuation flag)
+        let mut size: usize = 0;
+        for _ in 0..4 {
+            if pos >= esds.len() {
+                return 2;
+            }
+            let b = esds[pos];
+            pos += 1;
+            size = (size << 7) | (b & 0x7F) as usize;
+            if b & 0x80 == 0 {
+                break;
+            }
+        }
+
+        if tag == 0x05 {
+            // Found DecoderSpecificInfo — first 5 bits are audioObjectType
+            if pos < esds.len() {
+                let aot = esds[pos] >> 3;
+                if aot > 0 {
+                    return aot;
+                }
+            }
+            return 2;
+        }
+
+        // For container tags (0x03, 0x04), skip only their header fields
+        // and continue scanning their children
+        if tag == 0x03 {
+            // ES_Descriptor: skip ES_ID(2) + flags(1) = 3 bytes
+            if pos + 3 <= esds.len() {
+                pos += 3;
+            }
+        } else if tag == 0x04 {
+            // DecoderConfigDescriptor: skip fixed fields = 13 bytes
+            if pos + 13 <= esds.len() {
+                pos += 13;
+            }
+        } else {
+            // Unknown tag — skip its body entirely
+            pos += size;
+        }
+    }
+
+    // Default to AAC-LC
+    2
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -207,5 +287,56 @@ mod tests {
     #[test]
     fn test_that_av1_codec_string_falls_back_on_truncated_data() {
         assert_eq!(build_av1_codec_string(&[0x81]), "av01");
+    }
+
+    // --- AAC ---
+
+    #[test]
+    fn test_that_aac_lc_object_type_is_extracted_from_esds() {
+        // GIVEN — a real-world esds box for AAC-LC (audioObjectType = 2)
+        // AudioSpecificConfig: 0x11 0x90 => AOT=2 (AAC-LC)
+        let esds: &[u8] = &[
+            0x00, 0x00, 0x00, 0x00, // version + flags
+            0x03, 0x19, // ES_Descriptor, size=25
+            0x00, 0x01, // ES_ID
+            0x00, // flags
+            0x04, 0x11, // DecoderConfigDescriptor, size=17
+            0x40, 0x15, 0x00, 0x00, 0x00, // objectType, streamType, bufferSize
+            0x00, 0x01, 0xF4, 0x00, // maxBitrate
+            0x00, 0x01, 0xF4, 0x00, // avgBitrate
+            0x05, 0x02, // DecoderSpecificInfo, size=2
+            0x11, 0x90, // AudioSpecificConfig: AOT=2(AAC-LC)
+        ];
+
+        assert_eq!(extract_aac_audio_object_type(esds), 2);
+    }
+
+    #[test]
+    fn test_that_he_aac_object_type_is_extracted_from_esds() {
+        // GIVEN — esds with audioObjectType = 5 (SBR / HE-AAC)
+        let esds: &[u8] = &[
+            0x00, 0x00, 0x00, 0x00, // version + flags
+            0x03, 0x19, // ES_Descriptor, size=25
+            0x00, 0x01, // ES_ID
+            0x00, // flags
+            0x04, 0x11, // DecoderConfigDescriptor, size=17
+            0x40, 0x15, 0x00, 0x00, 0x00, // objectType, streamType, bufferSize
+            0x00, 0x01, 0xF4, 0x00, // maxBitrate
+            0x00, 0x01, 0xF4, 0x00, // avgBitrate
+            0x05, 0x02, // DecoderSpecificInfo, size=2
+            0x2B, 0x90, // AudioSpecificConfig: AOT=5 (HE-AAC)
+        ];
+
+        assert_eq!(extract_aac_audio_object_type(esds), 5);
+    }
+
+    #[test]
+    fn test_that_empty_esds_defaults_to_aac_lc() {
+        assert_eq!(extract_aac_audio_object_type(&[]), 2);
+    }
+
+    #[test]
+    fn test_that_truncated_esds_defaults_to_aac_lc() {
+        assert_eq!(extract_aac_audio_object_type(&[0x00, 0x00, 0x00, 0x00]), 2);
     }
 }
