@@ -1,24 +1,23 @@
 pub(crate) mod extract_audio;
+pub(crate) mod factories;
+pub(crate) mod format_detect;
 pub(crate) mod migrate;
 pub(crate) mod probe;
 pub(crate) mod process;
+pub(crate) mod time;
 pub(crate) mod trim;
 
-use std::fs::File;
-use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom};
-use std::path::Path;
-
 use clap::ValueEnum;
-use miette::{Context, IntoDiagnostic, Result};
 use serde::Serialize;
 
 use splica_core::{
-    ContainerFormat, DecodeError, DemuxError, Demuxer, EncodeError, ErrorKind, FilterError,
-    MuxError, Muxer, PipelineError,
+    ContainerFormat, DecodeError, DemuxError, EncodeError, ErrorKind, FilterError, MuxError,
+    PipelineError,
 };
-use splica_mkv::{MkvDemuxer, MkvMuxer};
-use splica_mp4::{Mp4Demuxer, Mp4Muxer};
-use splica_webm::{WebmDemuxer, WebmMuxer};
+
+pub(crate) use factories::{create_muxer, open_demuxer, output_container, validate_output_format};
+pub(crate) use format_detect::{detect_format, DetectedFormat};
+pub(crate) use time::parse_time;
 
 // ---------------------------------------------------------------------------
 // Shared CLI enums
@@ -189,256 +188,5 @@ fn error_kind_to_classification(kind: ErrorKind) -> (&'static str, i32) {
         ErrorKind::Io => ("internal_error", exit_code::INTERNAL),
         ErrorKind::ResourceExhausted => ("resource_exhausted", exit_code::RESOURCE_EXHAUSTED),
         ErrorKind::Internal => ("internal_error", exit_code::INTERNAL),
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Output format validation
-// ---------------------------------------------------------------------------
-
-/// Validates that the output file extension is a format splica can write.
-/// Fails fast before any input is read, with a helpful error message.
-pub(crate) fn validate_output_format(output: &Path) -> Result<()> {
-    let ext = output.extension().and_then(|e| e.to_str()).unwrap_or("");
-
-    match ContainerFormat::from_extension(ext) {
-        Some(fmt) if fmt.is_writable() => Ok(()),
-        Some(_) => Ok(()), // unreachable since all recognized formats are writable
-        None if ext.is_empty() => Err(miette::miette!(
-            "output file has no extension — cannot determine output format\n  \
-             → Use a recognized extension: .mp4, .webm, .mkv"
-        )),
-        None => Err(miette::miette!(
-            "unsupported output format '.{ext}'\n  \
-             → splica can currently write: mp4, webm, mkv\n  \
-             → Supported extensions: .mp4, .m4v, .m4a, .webm, .mkv, .mka"
-        )),
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Time parsing
-// ---------------------------------------------------------------------------
-
-/// Parses a human-readable timestamp into seconds.
-///
-/// Supported formats:
-/// - "90" or "90.5" — seconds
-/// - "1:30" or "1:30.5" — minutes:seconds
-/// - "0:01:30" or "0:01:30.5" — hours:minutes:seconds
-pub(crate) fn parse_time(s: &str) -> Result<f64> {
-    let parts: Vec<&str> = s.split(':').collect();
-    match parts.len() {
-        1 => {
-            // seconds only
-            parts[0]
-                .parse::<f64>()
-                .into_diagnostic()
-                .wrap_err_with(|| format!("invalid time: '{s}'"))
-        }
-        2 => {
-            // minutes:seconds
-            let minutes: f64 = parts[0]
-                .parse()
-                .into_diagnostic()
-                .wrap_err_with(|| format!("invalid time: '{s}'"))?;
-            let seconds: f64 = parts[1]
-                .parse()
-                .into_diagnostic()
-                .wrap_err_with(|| format!("invalid time: '{s}'"))?;
-            Ok(minutes * 60.0 + seconds)
-        }
-        3 => {
-            // hours:minutes:seconds
-            let hours: f64 = parts[0]
-                .parse()
-                .into_diagnostic()
-                .wrap_err_with(|| format!("invalid time: '{s}'"))?;
-            let minutes: f64 = parts[1]
-                .parse()
-                .into_diagnostic()
-                .wrap_err_with(|| format!("invalid time: '{s}'"))?;
-            let seconds: f64 = parts[2]
-                .parse()
-                .into_diagnostic()
-                .wrap_err_with(|| format!("invalid time: '{s}'"))?;
-            Ok(hours * 3600.0 + minutes * 60.0 + seconds)
-        }
-        _ => Err(miette::miette!(
-            "invalid time format: '{s}' — use seconds, M:SS, or H:MM:SS"
-        )),
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Format detection
-// ---------------------------------------------------------------------------
-
-/// Detected input container format (from magic bytes and EBML DocType).
-pub(crate) enum DetectedFormat {
-    Mp4,
-    WebM,
-    Mkv,
-}
-
-/// Sniffs the container format from the first few bytes of a file.
-///
-/// For EBML-based formats (WebM and MKV), reads the DocType element to
-/// distinguish them: "webm" maps to WebM, "matroska" maps to MKV, and
-/// unrecognized EBML DocTypes default to MKV (the superset format).
-pub(crate) fn detect_format(file: &mut (impl Read + Seek)) -> Result<DetectedFormat> {
-    let mut magic = [0u8; 12];
-    let bytes_read = file
-        .read(&mut magic)
-        .into_diagnostic()
-        .wrap_err("could not read file header")?;
-    file.seek(SeekFrom::Start(0))
-        .into_diagnostic()
-        .wrap_err("could not seek back to start")?;
-
-    if bytes_read < 4 {
-        return Err(miette::miette!(
-            "file too small to detect format ({bytes_read} bytes)"
-        ));
-    }
-
-    // WebM/MKV (Matroska): EBML header starts with 0x1A 0x45 0xDF 0xA3
-    if magic[0] == 0x1A && magic[1] == 0x45 && magic[2] == 0xDF && magic[3] == 0xA3 {
-        let format = detect_ebml_doctype(file).unwrap_or(DetectedFormat::Mkv);
-        return Ok(format);
-    }
-
-    // MP4: "ftyp" box at bytes 4-7
-    if bytes_read >= 8 && &magic[4..8] == b"ftyp" {
-        return Ok(DetectedFormat::Mp4);
-    }
-
-    Err(miette::miette!(
-        "unsupported container format — splica supports MP4, WebM, and MKV"
-    ))
-}
-
-/// Reads the EBML header to extract the DocType and determine whether the
-/// file is WebM or MKV. Resets the reader to position 0 before returning.
-fn detect_ebml_doctype(file: &mut (impl Read + Seek)) -> Result<DetectedFormat> {
-    file.seek(SeekFrom::Start(0))
-        .into_diagnostic()
-        .wrap_err("could not seek to start for DocType detection")?;
-
-    // Read enough of the EBML header to find the DocType element.
-    // The EBML header is typically small (under 64 bytes).
-    let mut buf = [0u8; 128];
-    let n = file
-        .read(&mut buf)
-        .into_diagnostic()
-        .wrap_err("could not read EBML header")?;
-    file.seek(SeekFrom::Start(0))
-        .into_diagnostic()
-        .wrap_err("could not seek back to start after DocType detection")?;
-
-    let data = &buf[..n];
-
-    // Search for DocType element ID (0x4282) within the EBML header body.
-    // The EBML header element starts at byte 0 with ID 0x1A45DFA3.
-    // We scan for the 2-byte DocType element ID and read its string value.
-    let doc_type_id: [u8; 2] = [0x42, 0x82];
-    for i in 4..data.len().saturating_sub(3) {
-        if data[i] == doc_type_id[0] && data[i + 1] == doc_type_id[1] {
-            // Found DocType element ID. Next byte(s) are the EBML vint size.
-            let size_start = i + 2;
-            if size_start >= data.len() {
-                break;
-            }
-            let size_byte = data[size_start];
-            if size_byte == 0 {
-                break;
-            }
-            // For a 1-byte vint, the size is size_byte & 0x7F
-            let width = size_byte.leading_zeros() as usize + 1;
-            if size_start + width > data.len() {
-                break;
-            }
-            let mut size: u64 = 0;
-            for &b in &data[size_start..size_start + width] {
-                size = (size << 8) | b as u64;
-            }
-            // Strip marker bit
-            let mask = 1u64 << (7 * width);
-            size &= mask - 1;
-
-            let str_start = size_start + width;
-            let str_end = str_start + size as usize;
-            if str_end > data.len() {
-                break;
-            }
-            let doc_type_bytes = &data[str_start..str_end];
-            // Trim trailing nulls
-            let end = doc_type_bytes
-                .iter()
-                .position(|&b| b == 0)
-                .unwrap_or(doc_type_bytes.len());
-            let doc_type = std::str::from_utf8(&doc_type_bytes[..end]).unwrap_or("");
-
-            return match doc_type {
-                "webm" => Ok(DetectedFormat::WebM),
-                "matroska" => Ok(DetectedFormat::Mkv),
-                _ => Ok(DetectedFormat::Mkv), // MKV is the superset
-            };
-        }
-    }
-
-    // Could not find DocType — default to MKV (the superset)
-    Ok(DetectedFormat::Mkv)
-}
-
-// ---------------------------------------------------------------------------
-// Container helpers
-// ---------------------------------------------------------------------------
-
-pub(crate) fn output_container(path: &Path) -> Option<ContainerFormat> {
-    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-    ContainerFormat::from_extension(ext)
-}
-
-/// Opens a demuxer for the given file, auto-detecting the container format.
-pub(crate) fn open_demuxer(path: &Path) -> Result<Box<dyn Demuxer>> {
-    let mut file = File::open(path)
-        .into_diagnostic()
-        .wrap_err_with(|| format!("could not open file '{}'", path.display()))?;
-
-    let format = detect_format(&mut file)?;
-
-    match format {
-        DetectedFormat::Mp4 => {
-            let demuxer = Mp4Demuxer::open(file)
-                .into_diagnostic()
-                .wrap_err("failed to parse MP4 container")?;
-            Ok(Box::new(demuxer))
-        }
-        DetectedFormat::WebM => {
-            let demuxer = WebmDemuxer::open(BufReader::new(file))
-                .into_diagnostic()
-                .wrap_err("failed to parse WebM container")?;
-            Ok(Box::new(demuxer))
-        }
-        DetectedFormat::Mkv => {
-            let demuxer = MkvDemuxer::open(BufReader::new(file))
-                .into_diagnostic()
-                .wrap_err("failed to parse MKV container")?;
-            Ok(Box::new(demuxer))
-        }
-    }
-}
-
-/// Creates an output muxer based on file extension.
-pub(crate) fn create_muxer(output: &Path) -> Result<Box<dyn Muxer>> {
-    let out_file = File::create(output)
-        .into_diagnostic()
-        .wrap_err_with(|| format!("could not create output file '{}'", output.display()))?;
-
-    match output_container(output) {
-        Some(ContainerFormat::WebM) => Ok(Box::new(WebmMuxer::new(BufWriter::new(out_file)))),
-        Some(ContainerFormat::Mkv) => Ok(Box::new(MkvMuxer::new(BufWriter::new(out_file)))),
-        _ => Ok(Box::new(Mp4Muxer::new(BufWriter::new(out_file)))),
     }
 }
