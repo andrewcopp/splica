@@ -133,17 +133,10 @@ impl H264Decoder {
         // In a minimal SPS, max_num_ref_frames is at a variable bit position
         // after profile/level/constraint bytes. For now, we expose a default
         // and can refine with proper SPS parsing later.
-        let max_ref_frames = self
-            .avcc_config
-            .sps
-            .first()
-            .and_then(|_sps| {
-                // Full Exp-Golomb parsing of the SPS would be needed
-                // to extract max_num_ref_frames accurately.
-                // For now, return 0 to indicate "not parsed".
-                Some(0u8)
-            })
-            .unwrap_or(0);
+        // Full Exp-Golomb parsing of the SPS would be needed
+        // to extract max_num_ref_frames accurately.
+        // For now, return 0 to indicate "not parsed".
+        let max_ref_frames = 0;
 
         H264DecoderConfig {
             profile: H264Profile::from(self.avcc_config.profile_idc),
