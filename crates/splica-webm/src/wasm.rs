@@ -10,7 +10,7 @@ use wasm_bindgen::prelude::*;
 use splica_core::wasm_types::{
     audio_track_info_json, video_track_info_json, WasmVideoDecoderConfig, WasmVideoPacket,
 };
-use splica_core::{Demuxer, TrackKind};
+use splica_core::{Codec, Demuxer, TrackKind, VideoCodec};
 
 use crate::WebmDemuxer;
 
@@ -81,12 +81,12 @@ impl WasmWebmDemuxer {
         }
     }
 
-    /// Returns a WebCodecs-compatible `VideoDecoderConfig`, or null if no video track.
+    /// Returns a WebCodecs-compatible `VideoDecoderConfig`, or null if no
+    /// video track is present.
     ///
-    /// Parses the VP9 CodecPrivate data to build an accurate codec string.
-    /// Falls back to `"vp09.00.10.08"` (profile 0, level 1.0, 8-bit) when
-    /// CodecPrivate is absent. VP9 bitstreams are self-delimiting, so
-    /// `description` is empty.
+    /// Supports VP8, VP9, and AV1 video tracks. For VP9, parses the
+    /// CodecPrivate data to build an accurate codec string. Returns an error
+    /// if the video track uses an unsupported codec.
     #[wasm_bindgen(js_name = "videoDecoderConfig")]
     pub fn video_decoder_config(&self) -> Result<Option<WasmVideoDecoderConfig>, JsValue> {
         let video_track = self
@@ -106,13 +106,42 @@ impl WasmWebmDemuxer {
         };
 
         let codec_private = self.inner.codec_private(track.index);
-        let codec_string = build_vp9_codec_string(codec_private);
-        Ok(Some(WasmVideoDecoderConfig::new(
-            codec_string,
-            video.width,
-            video.height,
-            Vec::new(),
-        )))
+        match &track.codec {
+            Codec::Video(VideoCodec::Av1) => {
+                // AV1 in WebM: CodecPrivate contains av1C config
+                let description = codec_private.map(|d| d.to_vec()).unwrap_or_default();
+                Ok(Some(WasmVideoDecoderConfig::new(
+                    "av01".to_string(),
+                    video.width,
+                    video.height,
+                    description,
+                )))
+            }
+            Codec::Video(VideoCodec::Other(name)) if name == "VP8" => {
+                // VP8 doesn't need a description; codec string is simple
+                Ok(Some(WasmVideoDecoderConfig::new(
+                    "vp8".to_string(),
+                    video.width,
+                    video.height,
+                    Vec::new(),
+                )))
+            }
+            Codec::Video(VideoCodec::Other(name)) if name == "VP9" => {
+                let codec_string = build_vp9_codec_string(codec_private);
+                Ok(Some(WasmVideoDecoderConfig::new(
+                    codec_string,
+                    video.width,
+                    video.height,
+                    Vec::new(),
+                )))
+            }
+            Codec::Video(vc) => Err(JsValue::from_str(&format!(
+                "unsupported video codec in WebM: {vc}"
+            ))),
+            Codec::Audio(_) => Err(JsValue::from_str(
+                "video track has audio codec (unexpected)",
+            )),
+        }
     }
 
     /// Reads the next video packet, skipping audio packets.

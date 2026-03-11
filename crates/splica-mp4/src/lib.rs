@@ -5,6 +5,7 @@
 
 pub(crate) mod box_builders;
 pub mod boxes;
+pub(crate) mod codec_strings;
 pub mod demuxer;
 pub mod error;
 pub mod fmp4_muxer;

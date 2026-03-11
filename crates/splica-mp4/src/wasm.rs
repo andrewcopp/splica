@@ -13,6 +13,9 @@ use splica_core::wasm_types::{
 use splica_core::{Demuxer, TrackKind};
 
 use crate::boxes::stsd::CodecConfig;
+use crate::codec_strings::{
+    build_av1_codec_string, build_avc_codec_string, build_hevc_codec_string,
+};
 use crate::Mp4Demuxer;
 
 /// MP4 demuxer accessible from JavaScript.
@@ -96,13 +99,16 @@ impl WasmMp4Demuxer {
         }
     }
 
-    /// Returns a WebCodecs-compatible `VideoDecoderConfig` as a `WasmVideoDecoderConfig`,
-    /// or null if no H.264 video track is present.
+    /// Returns a WebCodecs-compatible `VideoDecoderConfig`, or null if no
+    /// video track is present.
+    ///
+    /// Supports H.264, H.265, and AV1 video tracks. Returns an error if the
+    /// video track uses an unsupported or unknown codec.
     ///
     /// The returned config contains:
     /// - `codec`: WebCodecs codec string (e.g., `"avc1.42c01e"`)
     /// - `coded_width` / `coded_height`: video dimensions
-    /// - `description`: raw avcC bytes for `VideoDecoderConfig.description`
+    /// - `description`: raw codec config bytes for `VideoDecoderConfig.description`
     #[wasm_bindgen(js_name = "videoDecoderConfig")]
     pub fn video_decoder_config(&self) -> Result<Option<WasmVideoDecoderConfig>, JsValue> {
         let video_track = self
@@ -132,7 +138,44 @@ impl WasmMp4Demuxer {
                     avcc.to_vec(),
                 )))
             }
-            _ => Ok(None),
+            Some(CodecConfig::Hev1 {
+                hvcc,
+                width,
+                height,
+                ..
+            }) => {
+                let codec_string = build_hevc_codec_string(hvcc);
+                Ok(Some(WasmVideoDecoderConfig::new(
+                    codec_string,
+                    *width as u32,
+                    *height as u32,
+                    hvcc.to_vec(),
+                )))
+            }
+            Some(CodecConfig::Av1 {
+                av1c,
+                width,
+                height,
+                ..
+            }) => {
+                let codec_string = build_av1_codec_string(av1c);
+                Ok(Some(WasmVideoDecoderConfig::new(
+                    codec_string,
+                    *width as u32,
+                    *height as u32,
+                    av1c.to_vec(),
+                )))
+            }
+            Some(CodecConfig::Mp4a { .. }) => {
+                // Audio-only codec config on a video track — shouldn't happen
+                Err(JsValue::from_str(
+                    "video track has audio codec config (mp4a)",
+                ))
+            }
+            Some(CodecConfig::Unknown(name)) => Err(JsValue::from_str(&format!(
+                "unsupported video codec: {name}"
+            ))),
+            None => Err(JsValue::from_str("video track has no codec configuration")),
         }
     }
 
@@ -172,18 +215,5 @@ impl WasmMp4Demuxer {
                 Err(e) => return Err(JsValue::from_str(&e.to_string())),
             }
         }
-    }
-}
-
-/// Builds a WebCodecs AVC codec string from avcC data.
-///
-/// Format: `avc1.PPCCLL` where PP=profile, CC=compatibility, LL=level.
-/// Falls back to `"avc1"` if the avcC data is too short.
-fn build_avc_codec_string(avcc: &[u8]) -> String {
-    // avcC layout: [0]=version, [1]=profile, [2]=compatibility, [3]=level
-    if avcc.len() >= 4 {
-        format!("avc1.{:02x}{:02x}{:02x}", avcc[1], avcc[2], avcc[3])
-    } else {
-        "avc1".to_string()
     }
 }
