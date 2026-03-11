@@ -41,6 +41,7 @@
 //! codec crates should not be linked — the `splica-mp4` demuxer alone
 //! should compile to <100KB wasm.
 
+pub mod aac;
 pub mod error;
 pub mod h264;
 
@@ -51,3 +52,6 @@ pub use h264::{H264Decoder, H264DecoderConfig, H264Profile};
 pub use h264::{
     H264Encoder, H264EncoderBuilder, H264EncoderConfig, H264EncoderLevel, H264EncoderProfile,
 };
+
+#[cfg(feature = "codec-aac")]
+pub use aac::{AacDecoder, AacDecoderConfig};

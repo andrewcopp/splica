@@ -9,9 +9,12 @@ description = "Codec trait implementations and FFI wrappers for the splica media
 
 [features]
 codec-h264 = ["dep:openh264"]
+codec-aac = ["dep:symphonia-core", "dep:symphonia-codec-aac"]
 
 [dependencies]
 splica-core.workspace = true
 bytes.workspace = true
 thiserror.workspace = true
 openh264 = { version = "0.9", optional = true }
+symphonia-core = { version = "0.5", optional = true }
+symphonia-codec-aac = { version = "0.5", optional = true }
