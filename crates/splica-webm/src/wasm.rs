@@ -7,8 +7,10 @@ use std::io::Cursor;
 
 use wasm_bindgen::prelude::*;
 
-use splica_core::wasm_types::{audio_track_info_json, video_track_info_json};
-use splica_core::Demuxer;
+use splica_core::wasm_types::{
+    audio_track_info_json, video_track_info_json, WasmVideoDecoderConfig, WasmVideoPacket,
+};
+use splica_core::{Demuxer, TrackKind};
 
 use crate::WebmDemuxer;
 
@@ -78,4 +80,79 @@ impl WasmWebmDemuxer {
             Err(e) => Err(JsValue::from_str(&e.to_string())),
         }
     }
+
+    /// Returns a WebCodecs-compatible `VideoDecoderConfig`, or null if no video track.
+    ///
+    /// VP9 uses `"vp09.00.10.08"` as the default codec string. VP9 bitstreams
+    /// are self-delimiting, so `description` is empty.
+    #[wasm_bindgen(js_name = "videoDecoderConfig")]
+    pub fn video_decoder_config(&self) -> Result<Option<WasmVideoDecoderConfig>, JsValue> {
+        let video_track = self
+            .inner
+            .tracks()
+            .iter()
+            .find(|t| t.kind == TrackKind::Video);
+
+        let track = match video_track {
+            Some(t) => t,
+            None => return Ok(None),
+        };
+
+        let video = match &track.video {
+            Some(v) => v,
+            None => return Ok(None),
+        };
+
+        let codec_string = build_vp9_codec_string();
+        Ok(Some(WasmVideoDecoderConfig::new(
+            codec_string,
+            video.width,
+            video.height,
+            Vec::new(),
+        )))
+    }
+
+    /// Reads the next video packet, skipping audio packets.
+    ///
+    /// Returns a `WasmVideoPacket` with compressed data, presentation
+    /// timestamp in microseconds, and keyframe flag. Returns null at
+    /// end-of-stream.
+    #[wasm_bindgen(js_name = "readVideoPacket")]
+    pub fn read_video_packet(&mut self) -> Result<Option<WasmVideoPacket>, JsValue> {
+        let video_index = self
+            .inner
+            .tracks()
+            .iter()
+            .find(|t| t.kind == TrackKind::Video)
+            .map(|t| t.index);
+
+        let video_index = match video_index {
+            Some(idx) => idx,
+            None => return Ok(None),
+        };
+
+        loop {
+            match self.inner.read_packet() {
+                Ok(Some(packet)) => {
+                    if packet.track_index == video_index {
+                        let timestamp_us = packet.pts.as_seconds_f64() * 1_000_000.0;
+                        return Ok(Some(WasmVideoPacket::new(
+                            packet.data.to_vec(),
+                            timestamp_us,
+                            packet.is_keyframe,
+                        )));
+                    }
+                }
+                Ok(None) => return Ok(None),
+                Err(e) => return Err(JsValue::from_str(&e.to_string())),
+            }
+        }
+    }
+}
+
+/// Builds a WebCodecs VP9 codec string.
+///
+/// Default: `"vp09.00.10.08"` (profile 0, level 1.0, 8-bit).
+fn build_vp9_codec_string() -> String {
+    "vp09.00.10.08".to_string()
 }
