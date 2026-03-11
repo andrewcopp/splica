@@ -9,7 +9,10 @@ use serde::Serialize;
 use splica_codec::{
     AacDecoder, AacEncoderBuilder, H264Decoder, H264EncoderBuilder, OpusEncoderBuilder,
 };
-use splica_core::{AudioCodec, Codec, Demuxer, Muxer, TrackIndex, TrackKind, VideoCodec};
+use splica_core::{
+    AudioCodec, Codec, DecodeError, DemuxError, Demuxer, EncodeError, ErrorKind, FilterError,
+    MuxError, Muxer, PipelineError, TrackIndex, TrackKind, VideoCodec,
+};
 use splica_filter::{AspectMode, ScaleFilter};
 use splica_mp4::boxes::stsd::CodecConfig;
 use splica_mp4::{Mp4Demuxer, Mp4Muxer};
@@ -197,6 +200,8 @@ mod exit_code {
     pub const BAD_INPUT: i32 = 1;
     /// Internal error: encoder/muxer failure. May retry.
     pub const INTERNAL: i32 = 2;
+    /// Resource exhaustion: memory, file handles, budget limits. Retry after backoff.
+    pub const RESOURCE_EXHAUSTED: i32 = 3;
 }
 
 // ---------------------------------------------------------------------------
@@ -232,39 +237,55 @@ struct ErrorResult {
 
 /// Classifies an error into an error_kind string and exit code.
 ///
-/// Returns `(error_kind, exit_code)` based on the error message content.
+/// Walks the error source chain to find a typed splica error with an
+/// `ErrorKind`. This is robust against error message changes — classification
+/// depends on error variants, not string content.
 fn classify_error(error: &miette::Report) -> (&'static str, i32) {
-    let msg = format!("{error:?}");
-
-    // I/O and input validation errors — bad input
-    if msg.contains("could not open file")
-        || msg.contains("could not create output file")
-        || msg.contains("unsupported output format")
-        || msg.contains("unsupported container format")
-        || msg.contains("no extension")
-        || msg.contains("no H.264 video tracks")
-        || msg.contains("invalid resize")
-        || msg.contains("invalid bitrate")
-        || msg.contains("invalid time")
-        || msg.contains("failed to parse MP4 container")
-        || msg.contains("failed to parse WebM container")
-        || msg.contains("file too small")
-        || msg.contains("could not read file header")
-    {
-        return ("bad_input", exit_code::BAD_INPUT);
+    if let Some(kind) = extract_error_kind(error) {
+        return error_kind_to_classification(kind);
     }
-
-    // Encoder/decoder/pipeline internal failures — may be retryable
-    if msg.contains("transcode failed")
-        || msg.contains("encode failed")
-        || msg.contains("decode failed")
-        || msg.contains("failed to build transcode pipeline")
-    {
-        return ("internal_error", exit_code::INTERNAL);
-    }
-
-    // Default to bad_input for unrecognized errors
+    // Default: unrecognized errors are bad input (user-facing CLI errors
+    // like invalid arguments don't wrap splica library errors).
     ("bad_input", exit_code::BAD_INPUT)
+}
+
+/// Walks the error source chain looking for a typed splica error.
+fn extract_error_kind(error: &miette::Report) -> Option<ErrorKind> {
+    let mut current: &dyn std::error::Error = error.as_ref();
+    loop {
+        if let Some(e) = current.downcast_ref::<PipelineError>() {
+            return Some(e.kind());
+        }
+        if let Some(e) = current.downcast_ref::<DemuxError>() {
+            return Some(e.kind());
+        }
+        if let Some(e) = current.downcast_ref::<DecodeError>() {
+            return Some(e.kind());
+        }
+        if let Some(e) = current.downcast_ref::<EncodeError>() {
+            return Some(e.kind());
+        }
+        if let Some(e) = current.downcast_ref::<MuxError>() {
+            return Some(e.kind());
+        }
+        if let Some(e) = current.downcast_ref::<FilterError>() {
+            return Some(e.kind());
+        }
+        match current.source() {
+            Some(next) => current = next,
+            None => return None,
+        }
+    }
+}
+
+fn error_kind_to_classification(kind: ErrorKind) -> (&'static str, i32) {
+    match kind {
+        ErrorKind::InvalidInput => ("bad_input", exit_code::BAD_INPUT),
+        ErrorKind::UnsupportedFormat => ("bad_input", exit_code::BAD_INPUT),
+        ErrorKind::Io => ("internal_error", exit_code::INTERNAL),
+        ErrorKind::ResourceExhausted => ("resource_exhausted", exit_code::RESOURCE_EXHAUSTED),
+        ErrorKind::Internal => ("internal_error", exit_code::INTERNAL),
+    }
 }
 
 fn main() -> Result<()> {
