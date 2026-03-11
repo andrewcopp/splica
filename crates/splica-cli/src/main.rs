@@ -822,7 +822,13 @@ fn stream_copy(args: &ProcessArgs<'_>, json_mode: bool) -> Result<TranscodeOutpu
         eprintln!("  Done. Copied {packet_count} packets across {track_count} tracks.");
     }
 
-    Ok((packet_count, 0, 0, packet_count, audio_tracks))
+    Ok(TranscodeOutput {
+        packets_read: packet_count,
+        frames_decoded: 0,
+        frames_encoded: 0,
+        packets_written: packet_count,
+        audio_tracks,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1113,16 +1119,16 @@ fn process(args: &ProcessArgs<'_>, format: &OutputFormat) -> Result<()> {
 
     if json_mode {
         match result {
-            Ok((packets_read, frames_decoded, frames_encoded, packets_written, audio_tracks)) => {
+            Ok(out) => {
                 let output_json = TranscodeResult {
                     status: "ok".to_string(),
                     input: args.input.display().to_string(),
                     output: args.output.display().to_string(),
-                    packets_read,
-                    frames_decoded,
-                    frames_encoded,
-                    packets_written,
-                    audio_tracks,
+                    packets_read: out.packets_read,
+                    frames_decoded: out.frames_decoded,
+                    frames_encoded: out.frames_encoded,
+                    packets_written: out.packets_written,
+                    audio_tracks: out.audio_tracks,
                 };
                 println!("{}", serde_json::to_string(&output_json).unwrap());
                 Ok(())
@@ -1146,7 +1152,13 @@ fn process(args: &ProcessArgs<'_>, format: &OutputFormat) -> Result<()> {
     }
 }
 
-type TranscodeOutput = (u64, u64, u64, u64, Vec<TranscodeAudioInfo>);
+struct TranscodeOutput {
+    packets_read: u64,
+    frames_decoded: u64,
+    frames_encoded: u64,
+    packets_written: u64,
+    audio_tracks: Vec<TranscodeAudioInfo>,
+}
 /// Audio codec config extracted from the demuxer for audio tracks.
 #[derive(Debug, Clone)]
 struct AudioCodecConfig {
@@ -1546,11 +1558,11 @@ fn process_inner(args: &ProcessArgs<'_>, json_mode: bool) -> Result<TranscodeOut
         eprintln!("\r  Done.                                        ");
     }
 
-    Ok((
-        counter_packets_read.load(Ordering::Relaxed),
-        counter_frames_decoded.load(Ordering::Relaxed),
-        counter_frames_encoded.load(Ordering::Relaxed),
-        counter_packets_written.load(Ordering::Relaxed),
+    Ok(TranscodeOutput {
+        packets_read: counter_packets_read.load(Ordering::Relaxed),
+        frames_decoded: counter_frames_decoded.load(Ordering::Relaxed),
+        frames_encoded: counter_frames_encoded.load(Ordering::Relaxed),
+        packets_written: counter_packets_written.load(Ordering::Relaxed),
         audio_tracks,
-    ))
+    })
 }
