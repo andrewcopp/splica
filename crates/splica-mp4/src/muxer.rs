@@ -17,12 +17,20 @@ use crate::box_builders::{
 use crate::boxes::stsd::CodecConfig;
 use crate::metadata::MetadataBox;
 
+/// A single sample's metadata recorded during muxing.
+struct MuxSample {
+    offset: u64,
+    size: u32,
+    dts: i64,
+    cts_offset: i32,
+    is_sync: bool,
+}
+
 /// Collected metadata for one track during muxing.
 struct MuxTrack {
     track_info: TrackInfo,
     codec_config: CodecConfig,
-    /// (file_offset, sample_size, dts_ticks, cts_offset, is_keyframe)
-    samples: Vec<(u64, u32, i64, i32, bool)>,
+    samples: Vec<MuxSample>,
     timescale: u32,
 }
 
@@ -175,13 +183,13 @@ impl<W: Write + Seek> Mp4Muxer<W> {
         let dts_ticks = packet.dts.ticks();
         let cts_offset = (packet.pts.ticks() - packet.dts.ticks()) as i32;
 
-        self.tracks[track_idx].samples.push((
+        self.tracks[track_idx].samples.push(MuxSample {
             offset,
             size,
-            dts_ticks,
+            dts: dts_ticks,
             cts_offset,
-            packet.is_keyframe,
-        ));
+            is_sync: packet.is_keyframe,
+        });
 
         Ok(())
     }
@@ -228,11 +236,11 @@ impl<W: Write + Seek> Mp4Muxer<W> {
                 let last = &t.samples[t.samples.len() - 1];
                 // Rough: last DTS + one delta, scaled to movie timescale
                 let delta = if t.samples.len() > 1 {
-                    (t.samples[1].2 - t.samples[0].2).unsigned_abs()
+                    (t.samples[1].dts - t.samples[0].dts).unsigned_abs()
                 } else {
                     1
                 };
-                (last.2 as u64 + delta) * movie_timescale as u64 / t.timescale as u64
+                (last.dts as u64 + delta) * movie_timescale as u64 / t.timescale as u64
             })
             .max()
             .unwrap_or(0);
@@ -273,11 +281,11 @@ impl<W: Write + Seek> Mp4Muxer<W> {
         } else {
             let last = &track.samples[track.samples.len() - 1];
             let delta = if track.samples.len() > 1 {
-                (track.samples[1].2 - track.samples[0].2).unsigned_abs()
+                (track.samples[1].dts - track.samples[0].dts).unsigned_abs()
             } else {
                 1
             };
-            ((last.2 as u64 + delta) * movie_timescale as u64 / track.timescale as u64) as u32
+            ((last.dts as u64 + delta) * movie_timescale as u64 / track.timescale as u64) as u32
         };
 
         let tkhd = build_tkhd(track_id, track_dur_movie, width, height);
@@ -288,11 +296,11 @@ impl<W: Write + Seek> Mp4Muxer<W> {
         } else {
             let last = &track.samples[track.samples.len() - 1];
             let delta = if track.samples.len() > 1 {
-                (track.samples[1].2 - track.samples[0].2).unsigned_abs()
+                (track.samples[1].dts - track.samples[0].dts).unsigned_abs()
             } else {
                 1
             };
-            (last.2 as u64 + delta) as u32
+            (last.dts as u64 + delta) as u32
         };
 
         let mdhd = build_mdhd(track.timescale, media_duration);
@@ -399,7 +407,7 @@ fn build_ftyp() -> Vec<u8> {
     make_box(b"ftyp", &body)
 }
 
-fn build_stts(samples: &[(u64, u32, i64, i32, bool)]) -> Vec<u8> {
+fn build_stts(samples: &[MuxSample]) -> Vec<u8> {
     if samples.is_empty() {
         let mut body = vec![0, 0, 0, 0]; // version+flags
         body.extend_from_slice(&0u32.to_be_bytes());
@@ -410,7 +418,7 @@ fn build_stts(samples: &[(u64, u32, i64, i32, bool)]) -> Vec<u8> {
     let mut entries: Vec<(u32, u32)> = Vec::new(); // (count, delta)
     for i in 0..samples.len() {
         let delta = if i + 1 < samples.len() {
-            (samples[i + 1].2 - samples[i].2) as u32
+            (samples[i + 1].dts - samples[i].dts) as u32
         } else if !entries.is_empty() {
             entries.last().unwrap().1 // repeat last delta
         } else {
@@ -435,21 +443,21 @@ fn build_stts(samples: &[(u64, u32, i64, i32, bool)]) -> Vec<u8> {
     make_full_box(b"stts", &body)
 }
 
-fn build_ctts(samples: &[(u64, u32, i64, i32, bool)]) -> Option<Vec<u8>> {
+fn build_ctts(samples: &[MuxSample]) -> Option<Vec<u8>> {
     // Only needed if any sample has non-zero CTS offset
-    if samples.iter().all(|s| s.3 == 0) {
+    if samples.iter().all(|s| s.cts_offset == 0) {
         return None;
     }
 
     let mut entries: Vec<(u32, i32)> = Vec::new();
     for sample in samples {
         if let Some(last) = entries.last_mut() {
-            if last.1 == sample.3 {
+            if last.1 == sample.cts_offset {
                 last.0 += 1;
                 continue;
             }
         }
-        entries.push((1, sample.3));
+        entries.push((1, sample.cts_offset));
     }
 
     // Use version 1 for signed offsets
@@ -477,31 +485,31 @@ fn build_stsc(sample_count: u32) -> Vec<u8> {
     make_full_box(b"stsc", &body)
 }
 
-fn build_stsz(samples: &[(u64, u32, i64, i32, bool)]) -> Vec<u8> {
+fn build_stsz(samples: &[MuxSample]) -> Vec<u8> {
     let mut body = vec![0, 0, 0, 0]; // version+flags
     body.extend_from_slice(&0u32.to_be_bytes()); // sample_size (0 = variable)
     body.extend_from_slice(&(samples.len() as u32).to_be_bytes());
     for sample in samples {
-        body.extend_from_slice(&sample.1.to_be_bytes());
+        body.extend_from_slice(&sample.size.to_be_bytes());
     }
     make_full_box(b"stsz", &body)
 }
 
-fn build_stco(samples: &[(u64, u32, i64, i32, bool)]) -> Vec<u8> {
+fn build_stco(samples: &[MuxSample]) -> Vec<u8> {
     // Use co64 for safety (64-bit offsets)
     let mut body = vec![0, 0, 0, 0]; // version+flags
     body.extend_from_slice(&(samples.len() as u32).to_be_bytes());
     for sample in samples {
-        body.extend_from_slice(&sample.0.to_be_bytes());
+        body.extend_from_slice(&sample.offset.to_be_bytes());
     }
     make_full_box(b"co64", &body)
 }
 
-fn build_stss(samples: &[(u64, u32, i64, i32, bool)]) -> Option<Vec<u8>> {
+fn build_stss(samples: &[MuxSample]) -> Option<Vec<u8>> {
     let keyframes: Vec<u32> = samples
         .iter()
         .enumerate()
-        .filter(|(_, s)| s.4)
+        .filter(|(_, s)| s.is_sync)
         .map(|(i, _)| i as u32 + 1) // 1-based
         .collect();
 
