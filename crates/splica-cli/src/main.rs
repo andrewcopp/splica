@@ -13,7 +13,7 @@ use splica_core::{
     AudioCodec, Codec, DecodeError, DemuxError, Demuxer, EncodeError, ErrorKind, FilterError,
     MuxError, Muxer, PipelineError, TrackIndex, TrackKind, VideoCodec,
 };
-use splica_filter::{AspectMode, ScaleFilter};
+use splica_filter::{AspectMode, ScaleFilter, VolumeFilter};
 use splica_mp4::boxes::stsd::CodecConfig;
 use splica_mp4::{Mp4Demuxer, Mp4Muxer};
 use splica_pipeline::{PipelineBuilder, PipelineEventKind};
@@ -64,6 +64,11 @@ enum Commands {
         /// Aspect ratio handling when resizing (default: fit).
         #[arg(long, default_value = "fit")]
         aspect_mode: AspectModeArg,
+
+        /// Adjust audio volume. Accepts a linear multiplier (e.g., "0.5", "2.0")
+        /// or a dB value (e.g., "-6dB", "+3dB"). Implies re-encoding audio.
+        #[arg(long)]
+        volume: Option<String>,
 
         /// Output format for results (text or json).
         #[arg(long, default_value = "text")]
@@ -300,6 +305,7 @@ fn main() -> Result<()> {
             max_fps,
             resize,
             aspect_mode,
+            volume,
             format,
         } => process(
             &ProcessArgs {
@@ -310,6 +316,7 @@ fn main() -> Result<()> {
                 max_fps,
                 resize: resize.as_deref(),
                 aspect_mode_arg: &aspect_mode,
+                volume: volume.as_deref(),
             },
             &format,
         ),
@@ -332,6 +339,7 @@ fn main() -> Result<()> {
                     max_fps: None,
                     resize: None,
                     aspect_mode_arg: &AspectModeArg::Fit,
+                    volume: None,
                 },
                 &OutputFormat::Text,
             )
@@ -356,6 +364,7 @@ fn main() -> Result<()> {
                     max_fps,
                     resize: resize.as_deref(),
                     aspect_mode_arg: &aspect_mode,
+                    volume: None,
                 },
                 &format,
             )
@@ -1064,6 +1073,27 @@ fn parse_resize(s: &str) -> Result<(u32, u32)> {
     Ok((w, h))
 }
 
+fn parse_volume(s: &str) -> Result<VolumeFilter> {
+    let s = s.trim();
+    if let Some(db_str) = s.strip_suffix("dB").or_else(|| s.strip_suffix("db")) {
+        let db: f32 = db_str
+            .trim()
+            .parse()
+            .into_diagnostic()
+            .wrap_err_with(|| format!("invalid dB value in volume: '{s}'"))?;
+        VolumeFilter::from_db(db)
+            .into_diagnostic()
+            .wrap_err_with(|| format!("invalid volume: '{s}'"))
+    } else {
+        let gain: f32 = s.parse().into_diagnostic().wrap_err_with(|| {
+            format!("invalid volume: '{s}' — use a number (e.g., '0.5') or dB value (e.g., '-6dB')")
+        })?;
+        VolumeFilter::new(gain)
+            .into_diagnostic()
+            .wrap_err_with(|| format!("invalid volume: '{s}'"))
+    }
+}
+
 struct ProcessArgs<'a> {
     input: &'a Path,
     output: &'a Path,
@@ -1072,6 +1102,7 @@ struct ProcessArgs<'a> {
     max_fps: Option<f32>,
     resize: Option<&'a str>,
     aspect_mode_arg: &'a AspectModeArg,
+    volume: Option<&'a str>,
 }
 
 fn process(args: &ProcessArgs<'_>, format: &OutputFormat) -> Result<()> {
@@ -1140,7 +1171,8 @@ fn process_inner(args: &ProcessArgs<'_>, json_mode: bool) -> Result<TranscodeOut
     let user_requested_reencode = args.bitrate.is_some()
         || args.preset.is_some()
         || args.max_fps.is_some()
-        || args.resize.is_some();
+        || args.resize.is_some()
+        || args.volume.is_some();
 
     let effective_preset = args.preset.unwrap_or(&EncodePreset::Medium);
 
@@ -1451,6 +1483,16 @@ fn process_inner(args: &ProcessArgs<'_>, json_mode: bool) -> Result<TranscodeOut
                     "unsupported target audio codec '{}' — cannot encode",
                     name,
                 ));
+            }
+        }
+    }
+
+    // Add volume filter to all transcoded audio tracks if --volume was specified
+    if let Some(volume_str) = args.volume {
+        let volume_filter = parse_volume(volume_str)?;
+        for (ac, &needs_transcode) in audio_track_configs.iter().zip(audio_needs_transcode.iter()) {
+            if needs_transcode {
+                builder = builder.with_audio_filter(ac.track_index, volume_filter.clone());
             }
         }
     }
