@@ -47,6 +47,8 @@ pub(crate) enum VideoCodecArg {
     H264,
     /// H.265 / HEVC (requires kvazaar).
     H265,
+    /// AV1 (default for WebM, also valid in MP4 and MKV).
+    Av1,
 }
 
 /// CLI argument for aspect ratio handling.

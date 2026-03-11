@@ -282,6 +282,7 @@ fn map_video_codec(ffmpeg_codec: &str) -> Option<&'static str> {
     match ffmpeg_codec {
         "libx264" | "h264" => Some("h264"),
         "libx265" | "hevc" | "h265" => Some("h265"),
+        "libaom-av1" | "av1" => Some("av1"),
         _ => None,
     }
 }
@@ -571,6 +572,26 @@ mod tests {
         let result = build_splica_command(&parsed);
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_that_codec_libaom_av1_maps_to_av1() {
+        let (_, cmd, _) = run("ffmpeg -i input.mp4 -c:v libaom-av1 output.mp4");
+
+        assert_eq!(
+            cmd,
+            "splica process --input input.mp4 --output output.mp4 --codec av1"
+        );
+    }
+
+    #[test]
+    fn test_that_codec_av1_maps_to_av1() {
+        let (_, cmd, _) = run("ffmpeg -i input.mp4 -c:v av1 output.mkv");
+
+        assert_eq!(
+            cmd,
+            "splica process --input input.mp4 --output output.mkv --codec av1"
+        );
     }
 
     #[test]

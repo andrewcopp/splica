@@ -49,6 +49,22 @@ pub(super) fn is_video_codec_compatible(codec: &Codec, container: ContainerForma
     }
 }
 
+/// Pre-flight check: reject codec/container combinations that cannot work.
+fn validate_codec_container(
+    codec: Option<&VideoCodecArg>,
+    container: ContainerFormat,
+) -> Result<()> {
+    match (codec, container) {
+        (Some(VideoCodecArg::H264), ContainerFormat::WebM) => Err(miette::miette!(
+            "H.264 is not supported in WebM — use --codec av1 or choose an MP4/MKV output"
+        )),
+        (Some(VideoCodecArg::H265), ContainerFormat::WebM) => Err(miette::miette!(
+            "H.265 is not supported in WebM — use --codec av1 or choose an MP4/MKV output"
+        )),
+        _ => Ok(()),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Output QC
 // ---------------------------------------------------------------------------
@@ -133,6 +149,10 @@ pub(super) fn reencode(args: &ProcessArgs<'_>, json_mode: bool) -> Result<Transc
 
     // Determine target audio codec based on output container
     let out_container = output_container(args.output).unwrap_or(ContainerFormat::Mp4);
+
+    // Validate codec-container compatibility before doing any work.
+    validate_codec_container(args.codec, out_container)?;
+
     let target_audio_codec = match out_container {
         ContainerFormat::WebM | ContainerFormat::Mkv => splica_core::AudioCodec::Opus,
         ContainerFormat::Mp4 => splica_core::AudioCodec::Aac,
@@ -254,7 +274,8 @@ pub(super) fn reencode(args: &ProcessArgs<'_>, json_mode: bool) -> Result<Transc
         }
 
         // Select encoder based on output container and --codec flag
-        let use_av1 = matches!(out_container, ContainerFormat::WebM);
+        let use_av1 = matches!(out_container, ContainerFormat::WebM)
+            || matches!(args.codec, Some(VideoCodecArg::Av1));
         let use_h265 = matches!(args.codec, Some(VideoCodecArg::H265));
 
         // Determine encode dimensions (resize overrides source)
