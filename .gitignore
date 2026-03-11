@@ -21,8 +21,6 @@ Thumbs.db
 .claude/personas/
 .claude/scheduled_tasks.lock
 
-# Test fixtures (large media files added ad-hoc)
-tests/fixtures/*.mkv
-!tests/fixtures/README.md
-# Small CC-licensed fixtures (~1MB each) are tracked in git:
-# bigbuckbunny_h264.mp4, bigbuckbunny_h265.mp4, bigbuckbunny_vp9.webm
+# Test fixtures — small CC-licensed clips (~1MB each) are tracked in git:
+# bigbuckbunny_h264.mp4, bigbuckbunny_h265.mp4, bigbuckbunny_vp9.webm,
+# bigbuckbunny_av1.mp4, bigbuckbunny_h264.mkv

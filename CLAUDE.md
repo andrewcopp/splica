@@ -67,6 +67,20 @@ Use `thiserror` for library error types and `miette` for CLI error reporting. Ea
 - **Small, focused types** — many small structs that each do one thing, not a few god structs.
 - **Size is a smell** — a file over 300 lines or a function over 30 lines is a signal to split. Treat these as triggers to rethink structure, not hard limits.
 
+## Sprint Cadence
+
+**3:1 model with trigger override.** Three feature sprints, then one dedicated tech debt sprint — but don't wait for the calendar if the trigger fires early.
+
+A debt sprint fires on whichever comes first:
+1. Three feature sprints have elapsed since the last debt sprint, **OR**
+2. Any single file crosses **500 lines** of non-test code
+
+### Debt Sprint Rules
+- Dana (tech-lead) runs an end-of-sprint review at the close of every sprint and updates the debt register.
+- During a debt sprint, the acceptance criteria are: every file over 500 lines gets under 500 lines, all tests pass, no behavior changes, Dana signs off.
+- P0-severity debt items (silent wrong output, correctness risks) get scheduled into the next sprint automatically, regardless of cadence.
+- Medium-severity items cannot be carried more than two sprints without an explicit priority call.
+
 ## Work Modes
 
 Every change falls into exactly one of three modes. Never mix modes in a single commit.
