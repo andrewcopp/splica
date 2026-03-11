@@ -420,39 +420,70 @@ impl<R: Read + Seek> Demuxer for Mp4Demuxer<R> {
 
 impl<R: Read + Seek> Seekable for Mp4Demuxer<R> {
     fn seek(&mut self, target: Timestamp, mode: SeekMode) -> Result<(), DemuxError> {
-        // For now, implement keyframe seek on the first video track.
-        // Find the video track
+        // Find the first video track, or fall back to the first track.
         let video_track_idx = self
             .mp4_tracks
             .iter()
             .position(|t| t.is_video())
-            .unwrap_or(0);
+            .or(if self.mp4_tracks.is_empty() {
+                None
+            } else {
+                Some(0)
+            })
+            .ok_or_else(|| DemuxError::InvalidContainer {
+                offset: 0,
+                message: "no tracks available for seeking".to_string(),
+            })?;
 
         let track = &self.mp4_tracks[video_track_idx];
+
+        if track.sample_table.entries.is_empty() {
+            return Err(DemuxError::InvalidContainer {
+                offset: 0,
+                message: "sample table is empty, cannot seek".to_string(),
+            });
+        }
+
         let target_ticks = target
             .rescale(track.sample_table.timescale)
             .map(|t| t.ticks())
-            .unwrap_or(0);
+            .ok_or_else(|| DemuxError::InvalidContainer {
+                offset: 0,
+                message: format!(
+                    "cannot rescale seek target to track timescale {}",
+                    track.sample_table.timescale
+                ),
+            })?;
 
-        // Find the sample at or before the target timestamp
+        // Find the sample at or before the target timestamp.
+        // If target is before all samples, use the first sample.
         let sample_idx = track
             .sample_table
             .entries
             .iter()
-            .rposition(|s| s.dts <= target_ticks);
+            .rposition(|s| s.dts <= target_ticks)
+            .unwrap_or(0);
 
         let seek_sample = match mode {
             SeekMode::Keyframe => {
-                // Find the nearest keyframe at or before the target
-                match sample_idx {
-                    Some(idx) => track.sample_table.entries[..=idx]
-                        .iter()
-                        .rposition(|s| s.is_keyframe)
-                        .unwrap_or(0),
-                    None => 0,
-                }
+                // Find the nearest keyframe at or before the target.
+                // If no keyframe exists before the target, use the first keyframe.
+                track.sample_table.entries[..=sample_idx]
+                    .iter()
+                    .rposition(|s| s.is_keyframe)
+                    .or_else(|| {
+                        track
+                            .sample_table
+                            .entries
+                            .iter()
+                            .position(|s| s.is_keyframe)
+                    })
+                    .ok_or_else(|| DemuxError::InvalidContainer {
+                        offset: 0,
+                        message: "no keyframes found in sample table".to_string(),
+                    })?
             }
-            SeekMode::Precise => sample_idx.unwrap_or(0),
+            SeekMode::Precise => sample_idx,
         };
 
         // Find this sample in the read order
@@ -460,7 +491,10 @@ impl<R: Read + Seek> Seekable for Mp4Demuxer<R> {
             .read_order
             .iter()
             .position(|&(ti, si)| ti == video_track_idx && si == seek_sample)
-            .unwrap_or(0);
+            .ok_or_else(|| DemuxError::InvalidContainer {
+                offset: 0,
+                message: format!("seek target sample {} not found in read order", seek_sample),
+            })?;
 
         self.position = read_pos;
         Ok(())

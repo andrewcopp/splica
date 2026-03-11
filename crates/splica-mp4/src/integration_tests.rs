@@ -554,6 +554,77 @@ fn test_that_fmp4_sample_counts_match() {
 }
 
 // ---------------------------------------------------------------------------
+// Seek tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_that_seek_to_keyframe_resets_read_position() {
+    // GIVEN — 5 video samples, first is keyframe
+    let mp4 = test_helpers::build_test_mp4(&[TestTrack::video(320, 240, 5)]);
+    let mut demuxer = Mp4Demuxer::open(Cursor::new(mp4)).unwrap();
+
+    // Read all packets
+    let mut count = 0;
+    while demuxer.read_packet().unwrap().is_some() {
+        count += 1;
+    }
+    assert_eq!(count, 5);
+
+    // WHEN — seek back to start
+    use splica_core::Seekable;
+    demuxer
+        .seek(
+            splica_core::Timestamp::new(0, 30000).unwrap(),
+            splica_core::SeekMode::Keyframe,
+        )
+        .unwrap();
+
+    // THEN — can read packets again
+    let first = demuxer.read_packet().unwrap().unwrap();
+    assert!(first.is_keyframe);
+}
+
+#[test]
+fn test_that_seek_precise_finds_correct_sample() {
+    // GIVEN — 10 video samples at 30000/1001 fps
+    let mp4 = test_helpers::build_test_mp4(&[TestTrack::video(320, 240, 10)]);
+    let mut demuxer = Mp4Demuxer::open(Cursor::new(mp4)).unwrap();
+
+    // WHEN — seek to timestamp of ~3rd sample (3 * 1001 ticks at timescale 30000)
+    use splica_core::Seekable;
+    demuxer
+        .seek(
+            splica_core::Timestamp::new(3003, 30000).unwrap(),
+            splica_core::SeekMode::Precise,
+        )
+        .unwrap();
+
+    // THEN — next packet is at or after the seek point
+    let pkt = demuxer.read_packet().unwrap().unwrap();
+    assert!(pkt.pts.as_seconds_f64() >= 0.09); // ~0.1 seconds
+}
+
+#[test]
+fn test_that_seek_on_empty_file_returns_error() {
+    // GIVEN — MP4 with 0 samples (we need a valid MP4 with an empty track)
+    // Use a 1-sample MP4 and read past it, then seek should still work on it.
+    // Instead, test seeking on a file with no video track and audio only.
+    let mp4 = test_helpers::build_test_mp4(&[TestTrack::audio(44100, 0)]);
+
+    let mut demuxer = Mp4Demuxer::open(Cursor::new(mp4)).unwrap();
+
+    // WHEN — seek on file with empty sample table
+    use splica_core::Seekable;
+    let result = demuxer.seek(
+        splica_core::Timestamp::new(0, 1).unwrap(),
+        splica_core::SeekMode::Keyframe,
+    );
+
+    // THEN — should error, not silently succeed
+    assert!(result.is_err());
+}
+
+// ---------------------------------------------------------------------------
 // Test helpers for fMP4 structure verification
 // ---------------------------------------------------------------------------
 
