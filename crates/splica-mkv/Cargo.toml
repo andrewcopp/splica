@@ -7,8 +7,13 @@ license.workspace = true
 repository.workspace = true
 description = "MKV demuxer and muxer for the splica media processing library"
 
+[features]
+wasm = ["dep:wasm-bindgen", "dep:js-sys", "splica-core/serde", "splica-core/wasm"]
+
 [dependencies]
 bytes.workspace = true
 splica-core.workspace = true
 splica-webm.workspace = true
 thiserror.workspace = true
+wasm-bindgen = { version = "0.2", optional = true }
+js-sys = { version = "0.3", optional = true }

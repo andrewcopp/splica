@@ -9,6 +9,8 @@ mod ebml;
 mod elements;
 pub mod error;
 mod muxer;
+#[cfg(feature = "wasm")]
+pub mod wasm;
 
 pub use demuxer::MkvDemuxer;
 pub use error::MkvError;
