@@ -4,6 +4,7 @@
 //! Every unsafe block has a `// SAFETY:` comment explaining the invariant.
 
 use std::any::Any;
+use std::collections::VecDeque;
 use std::ffi::CString;
 use std::ptr;
 
@@ -32,7 +33,7 @@ pub struct H265Encoder {
     config: H265EncoderConfig,
     track_index: TrackIndex,
     /// Buffered encoded packets from the last send_frame call.
-    pending_packets: Vec<Packet>,
+    pending_packets: VecDeque<Packet>,
     /// Frame counter for PTS tracking.
     frame_count: u64,
     /// Whether end-of-stream has been signaled.
@@ -263,7 +264,7 @@ impl H265EncoderBuilder {
                 height: self.height,
             },
             track_index: self.track_index,
-            pending_packets: Vec::new(),
+            pending_packets: VecDeque::new(),
             frame_count: 0,
             flushing: false,
             header_data,
@@ -388,7 +389,7 @@ impl H265Encoder {
                 data: Bytes::from(encoded_data),
             };
 
-            self.pending_packets.push(packet);
+            self.pending_packets.push_back(packet);
         }
 
         Ok(())
@@ -507,11 +508,7 @@ impl Encoder for H265Encoder {
     }
 
     fn receive_packet(&mut self) -> Result<Option<Packet>, EncodeError> {
-        if self.pending_packets.is_empty() {
-            Ok(None)
-        } else {
-            Ok(Some(self.pending_packets.remove(0)))
-        }
+        Ok(self.pending_packets.pop_front())
     }
 
     fn as_any(&self) -> &dyn Any {
