@@ -1,3 +1,4 @@
+use std::fs;
 use std::path::Path;
 
 use miette::{IntoDiagnostic, Result};
@@ -5,7 +6,9 @@ use serde::Serialize;
 
 use splica_core::TrackKind;
 
-use super::{classify_error, open_demuxer, ErrorResult, OutputFormat};
+use super::{
+    classify_error, detect_format, open_demuxer, DetectedFormat, ErrorResult, OutputFormat,
+};
 
 // ---------------------------------------------------------------------------
 // Probe types
@@ -14,6 +17,14 @@ use super::{classify_error, open_demuxer, ErrorResult, OutputFormat};
 #[derive(Serialize)]
 struct ProbeOutput {
     file: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    container: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    duration_seconds: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    size_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bitrate_kbps: Option<u64>,
     tracks: Vec<ProbeTrack>,
 }
 
@@ -59,6 +70,9 @@ pub(crate) fn probe(file: &Path, format: &OutputFormat) -> Result<()> {
 }
 
 fn probe_inner(file: &Path, format: &OutputFormat) -> Result<()> {
+    let container = detect_container(file);
+    let size_bytes = fs::metadata(file).ok().map(|m| m.len());
+
     let demuxer = open_demuxer(file)?;
 
     let tracks: Vec<ProbeTrack> = demuxer
@@ -104,10 +118,17 @@ fn probe_inner(file: &Path, format: &OutputFormat) -> Result<()> {
         })
         .collect();
 
+    let duration_seconds = max_track_duration(&tracks);
+    let bitrate_kbps = compute_bitrate_kbps(size_bytes, duration_seconds);
+
     match format {
         OutputFormat::Json => {
             let output = ProbeOutput {
                 file: file.display().to_string(),
+                container,
+                duration_seconds,
+                size_bytes,
+                bitrate_kbps,
                 tracks,
             };
             let json = serde_json::to_string_pretty(&output).into_diagnostic()?;
@@ -115,6 +136,7 @@ fn probe_inner(file: &Path, format: &OutputFormat) -> Result<()> {
         }
         OutputFormat::Text => {
             println!("File: {}", file.display());
+            print_summary(&container, duration_seconds, size_bytes, bitrate_kbps);
             println!("Tracks: {}", tracks.len());
             println!();
             for track in &tracks {
@@ -152,6 +174,83 @@ fn probe_inner(file: &Path, format: &OutputFormat) -> Result<()> {
     }
 
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Container-level helpers
+// ---------------------------------------------------------------------------
+
+/// Detects the container format name from magic bytes.
+fn detect_container(file: &Path) -> Option<String> {
+    let mut f = std::fs::File::open(file).ok()?;
+    let detected = detect_format(&mut f).ok()?;
+    let name = match detected {
+        DetectedFormat::Mp4 => "mp4",
+        DetectedFormat::WebM => "webm",
+        DetectedFormat::Mkv => "mkv",
+    };
+    Some(name.to_string())
+}
+
+/// Returns the maximum duration across all tracks.
+fn max_track_duration(tracks: &[ProbeTrack]) -> Option<f64> {
+    tracks
+        .iter()
+        .filter_map(|t| t.duration_seconds)
+        .fold(None, |acc, d| Some(acc.map_or(d, |a: f64| a.max(d))))
+}
+
+/// Computes overall bitrate in kbps from file size and duration.
+fn compute_bitrate_kbps(size_bytes: Option<u64>, duration: Option<f64>) -> Option<u64> {
+    let size = size_bytes?;
+    let dur = duration.filter(|&d| d > 0.0)?;
+    Some((size as f64 * 8.0 / dur / 1000.0) as u64)
+}
+
+/// Prints a container/duration/size summary line for text mode.
+fn print_summary(
+    container: &Option<String>,
+    duration: Option<f64>,
+    size_bytes: Option<u64>,
+    bitrate_kbps: Option<u64>,
+) {
+    let mut parts = Vec::new();
+
+    if let Some(ref c) = container {
+        parts.push(format!("Container: {c}"));
+    }
+    if let Some(dur) = duration {
+        let mins = (dur / 60.0).floor() as u64;
+        let secs = dur % 60.0;
+        parts.push(format!("Duration: {mins}:{secs:05.2}"));
+    }
+    if let Some(size) = size_bytes {
+        parts.push(format_file_size(size));
+    }
+    if let Some(kbps) = bitrate_kbps {
+        parts.push(format!("{kbps} kbps"));
+    }
+
+    if !parts.is_empty() {
+        println!("{}", parts.join(", "));
+    }
+}
+
+/// Formats a byte count into a human-readable string.
+fn format_file_size(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = 1024 * KB;
+    const GB: u64 = 1024 * MB;
+
+    if bytes >= GB {
+        format!("{:.1} GB", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.1} MB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.1} KB", bytes as f64 / KB as f64)
+    } else {
+        format!("{bytes} B")
+    }
 }
 
 fn format_color_space(cs: &splica_core::ColorSpace) -> String {
