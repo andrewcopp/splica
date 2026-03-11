@@ -415,3 +415,56 @@ fn test_that_process_of_av1_with_resize_succeeds() {
 
     let _ = std::fs::remove_file("/tmp/splica_test_av1_reencode.mp4");
 }
+
+// ---------------------------------------------------------------------------
+// AV1 encode (SPL-94)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_that_process_to_webm_produces_av1_output() {
+    // AV1 input → WebM output should re-encode as AV1 via rav1e.
+    let output = splica_binary()
+        .args([
+            "process",
+            "-i",
+            &fixture_path("bigbuckbunny_av1.mp4"),
+            "-o",
+            "/tmp/splica_test_av1_encode.webm",
+            "--resize",
+            "320x180",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "AV1 to WebM (AV1 encode) should succeed. stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Verify output exists and is non-empty
+    let meta = std::fs::metadata("/tmp/splica_test_av1_encode.webm").unwrap();
+    assert!(meta.len() > 0, "output file should be non-empty");
+
+    // Probe the output to verify it reports AV1 codec
+    let probe = splica_binary()
+        .args([
+            "probe",
+            "--format",
+            "json",
+            "/tmp/splica_test_av1_encode.webm",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(probe.status.success());
+    let stdout = String::from_utf8_lossy(&probe.stdout);
+    let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let codec = json["tracks"][0]["codec"].as_str().unwrap();
+    assert!(
+        codec.contains("AV1"),
+        "expected AV1 codec in output, got: {codec}"
+    );
+
+    let _ = std::fs::remove_file("/tmp/splica_test_av1_encode.webm");
+}

@@ -74,3 +74,6 @@ pub use opus::{OpusEncoder, OpusEncoderBuilder, OpusEncoderConfig};
 
 #[cfg(feature = "codec-av1")]
 pub use av1::Av1Decoder;
+
+#[cfg(feature = "codec-av1")]
+pub use av1::{Av1Encoder, Av1EncoderBuilder, Av1EncoderConfig};

@@ -7,8 +7,8 @@ use miette::{Context, IntoDiagnostic, Result};
 use serde::Serialize;
 
 use splica_codec::{
-    AacDecoder, AacEncoderBuilder, Av1Decoder, H264Decoder, H264EncoderBuilder, H265Decoder,
-    OpusDecoder, OpusEncoderBuilder,
+    AacDecoder, AacEncoderBuilder, Av1Decoder, Av1EncoderBuilder, H264Decoder, H264EncoderBuilder,
+    H265Decoder, OpusDecoder, OpusEncoderBuilder,
 };
 use splica_core::{
     AudioCodec, Codec, ContainerFormat, DecodeError, DemuxError, Demuxer, EncodeError, ErrorKind,
@@ -1329,6 +1329,8 @@ type DemuxerWithConfigs = (
         VideoTrackCodec,
         Vec<u8>,
         Option<splica_core::ColorSpace>,
+        u32, // width
+        u32, // height
     )>,
     Vec<AudioCodecConfig>,
 );
@@ -1379,7 +1381,10 @@ fn process_inner(args: &ProcessArgs<'_>, json_mode: bool) -> Result<TranscodeOut
                     match &track.codec {
                         Codec::Video(VideoCodec::H264) => {
                             if let Some(CodecConfig::Avc1 {
-                                avcc, color_space, ..
+                                avcc,
+                                color_space,
+                                width,
+                                height,
                             }) = mp4.codec_config(track.index)
                             {
                                 video_configs.push((
@@ -1387,12 +1392,17 @@ fn process_inner(args: &ProcessArgs<'_>, json_mode: bool) -> Result<TranscodeOut
                                     VideoTrackCodec::H264,
                                     avcc.to_vec(),
                                     *color_space,
+                                    *width as u32,
+                                    *height as u32,
                                 ));
                             }
                         }
                         Codec::Video(VideoCodec::H265) => {
                             if let Some(CodecConfig::Hev1 {
-                                hvcc, color_space, ..
+                                hvcc,
+                                color_space,
+                                width,
+                                height,
                             }) = mp4.codec_config(track.index)
                             {
                                 video_configs.push((
@@ -1400,12 +1410,17 @@ fn process_inner(args: &ProcessArgs<'_>, json_mode: bool) -> Result<TranscodeOut
                                     VideoTrackCodec::H265,
                                     hvcc.to_vec(),
                                     *color_space,
+                                    *width as u32,
+                                    *height as u32,
                                 ));
                             }
                         }
                         Codec::Video(VideoCodec::Av1) => {
                             if let Some(CodecConfig::Av1 {
-                                av1c, color_space, ..
+                                av1c,
+                                color_space,
+                                width,
+                                height,
                             }) = mp4.codec_config(track.index)
                             {
                                 video_configs.push((
@@ -1413,6 +1428,8 @@ fn process_inner(args: &ProcessArgs<'_>, json_mode: bool) -> Result<TranscodeOut
                                     VideoTrackCodec::Av1,
                                     av1c.to_vec(),
                                     *color_space,
+                                    *width as u32,
+                                    *height as u32,
                                 ));
                             }
                         }
@@ -1531,7 +1548,7 @@ fn process_inner(args: &ProcessArgs<'_>, json_mode: bool) -> Result<TranscodeOut
     // Re-encode path: we need video tracks with supported codec config to decode+encode
     if video_track_configs.is_empty() {
         return Err(miette::miette!(
-            "no supported video tracks found in '{}' — re-encoding supports H.264 and H.265",
+            "no supported video tracks found in '{}' — re-encoding supports H.264, H.265, and AV1",
             args.input.display()
         ));
     }
@@ -1593,7 +1610,9 @@ fn process_inner(args: &ProcessArgs<'_>, json_mode: bool) -> Result<TranscodeOut
         .with_demuxer(demuxer)
         .with_muxer(muxer);
 
-    for (track_idx, video_codec, config_data, color_space) in &video_track_configs {
+    for (track_idx, video_codec, config_data, color_space, src_width, src_height) in
+        &video_track_configs
+    {
         match video_codec {
             VideoTrackCodec::H264 => {
                 let decoder = H264Decoder::new(config_data)
@@ -1615,21 +1634,51 @@ fn process_inner(args: &ProcessArgs<'_>, json_mode: bool) -> Result<TranscodeOut
             }
         }
 
-        let mut enc_builder = H264EncoderBuilder::new()
-            .bitrate(bitrate_bps)
-            .max_frame_rate(frame_rate_hint)
-            .track_index(*track_idx);
+        // Select encoder based on output container
+        let use_av1_encode = matches!(out_container, ContainerFormat::WebM);
 
-        if let Some(cs) = color_space {
-            enc_builder = enc_builder.color_space(*cs);
+        if use_av1_encode {
+            // Determine encode dimensions (resize overrides source)
+            let (enc_w, enc_h) = if let Some(resize_str) = args.resize {
+                parse_resize(resize_str)?
+            } else {
+                (*src_width, *src_height)
+            };
+
+            let mut enc_builder = Av1EncoderBuilder::new()
+                .bitrate(bitrate_bps)
+                .track_index(*track_idx)
+                .dimensions(enc_w, enc_h)
+                .speed(6)
+                .max_frame_rate(frame_rate_hint);
+
+            if let Some(cs) = color_space {
+                enc_builder = enc_builder.color_space(*cs);
+            }
+
+            let encoder = enc_builder
+                .build()
+                .into_diagnostic()
+                .wrap_err("failed to create AV1 encoder")?;
+
+            builder = builder.with_encoder(*track_idx, encoder);
+        } else {
+            let mut enc_builder = H264EncoderBuilder::new()
+                .bitrate(bitrate_bps)
+                .max_frame_rate(frame_rate_hint)
+                .track_index(*track_idx);
+
+            if let Some(cs) = color_space {
+                enc_builder = enc_builder.color_space(*cs);
+            }
+
+            let encoder = enc_builder
+                .build()
+                .into_diagnostic()
+                .wrap_err("failed to create H.264 encoder")?;
+
+            builder = builder.with_encoder(*track_idx, encoder);
         }
-
-        let encoder = enc_builder
-            .build()
-            .into_diagnostic()
-            .wrap_err("failed to create H.264 encoder")?;
-
-        builder = builder.with_encoder(*track_idx, encoder);
 
         // Add scale filter if --resize was specified
         if let Some(resize_str) = args.resize {
