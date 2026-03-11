@@ -4,6 +4,7 @@ members = [
     "crates/splica-mp4",
     "crates/splica-webm",
     "crates/splica-mkv",
+    "crates/kvazaar-sys",
     "crates/splica-codec",
     "crates/splica-filter",
     "crates/splica-pipeline",

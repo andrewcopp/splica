@@ -60,6 +60,9 @@ pub use h264::{
 #[cfg(feature = "codec-h265")]
 pub use h265::{H265Decoder, H265DecoderConfig};
 
+#[cfg(feature = "codec-h265-enc")]
+pub use h265::{H265Encoder, H265EncoderBuilder, H265EncoderConfig};
+
 #[cfg(feature = "codec-aac")]
 pub use aac::{AacDecoder, AacDecoderConfig};
 

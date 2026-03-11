@@ -8,7 +8,9 @@
 
 use std::io::{Seek, SeekFrom, Write};
 
-use splica_core::{MuxError, Muxer, Packet, ResourceBudget, TrackIndex, TrackInfo, TrackKind};
+use splica_core::{
+    Codec, MuxError, Muxer, Packet, ResourceBudget, TrackIndex, TrackInfo, TrackKind, VideoCodec,
+};
 
 use crate::box_builders::{
     build_dinf, build_hdlr, build_mdhd, build_mvhd, build_smhd, build_stsd, build_tkhd, build_vmhd,
@@ -361,12 +363,24 @@ impl<W: Write + Seek> Muxer for Mp4Muxer<W> {
     fn add_track(&mut self, info: &TrackInfo) -> Result<TrackIndex, MuxError> {
         // Infer minimal codec config from TrackInfo
         let config = match (&info.kind, &info.video, &info.audio) {
-            (TrackKind::Video, Some(v), _) => CodecConfig::Avc1 {
-                width: v.width as u16,
-                height: v.height as u16,
-                avcc: bytes::Bytes::new(),
-                color_space: v.color_space,
-            },
+            (TrackKind::Video, Some(v), _) => {
+                let is_h265 = matches!(info.codec, Codec::Video(VideoCodec::H265));
+                if is_h265 {
+                    CodecConfig::Hev1 {
+                        width: v.width as u16,
+                        height: v.height as u16,
+                        hvcc: bytes::Bytes::new(),
+                        color_space: v.color_space,
+                    }
+                } else {
+                    CodecConfig::Avc1 {
+                        width: v.width as u16,
+                        height: v.height as u16,
+                        avcc: bytes::Bytes::new(),
+                        color_space: v.color_space,
+                    }
+                }
+            }
             (TrackKind::Audio, _, Some(a)) => CodecConfig::Mp4a {
                 sample_rate: a.sample_rate,
                 channel_count: 2,

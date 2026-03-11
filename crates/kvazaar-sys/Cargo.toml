@@ -1,0 +1,12 @@
+[package]
+name = "kvazaar-sys"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license = "BSD-3-Clause"
+repository.workspace = true
+description = "FFI bindings for the kvazaar HEVC encoder"
+links = "kvazaar"
+
+[build-dependencies]
+pkg-config = "0.3"

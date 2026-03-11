@@ -8,12 +8,13 @@ use serde::Serialize;
 
 use splica_codec::{
     AacDecoder, AacEncoderBuilder, Av1Decoder, Av1EncoderBuilder, H264Decoder, H264EncoderBuilder,
-    H265Decoder, OpusDecoder, OpusEncoderBuilder,
+    H265Decoder, H265EncoderBuilder, OpusDecoder, OpusEncoderBuilder,
 };
 use splica_core::{
     AudioCodec, Codec, ContainerFormat, DecodeError, DemuxError, Demuxer, EncodeError, ErrorKind,
     FilterError, MuxError, Muxer, PipelineError, TrackIndex, TrackKind, VideoCodec,
 };
+
 use splica_filter::{AspectMode, CropFilter, ScaleFilter, VolumeFilter};
 use splica_mkv::MkvMuxer;
 use splica_mp4::boxes::stsd::CodecConfig;
@@ -81,6 +82,11 @@ enum Commands {
         /// or a dB value (e.g., "-6dB", "+3dB"). Implies re-encoding audio.
         #[arg(long)]
         volume: Option<String>,
+
+        /// Output video codec (e.g., "h264", "h265"). Implies re-encoding.
+        /// Default: auto-select based on output container.
+        #[arg(long)]
+        codec: Option<VideoCodecArg>,
 
         /// Output format for results (text or json).
         #[arg(long, default_value = "text")]
@@ -195,6 +201,15 @@ enum EncodePreset {
 enum OutputFormat {
     Text,
     Json,
+}
+
+/// CLI argument for output video codec selection.
+#[derive(Clone, ValueEnum)]
+enum VideoCodecArg {
+    /// H.264 / AVC (default for MP4 and MKV).
+    H264,
+    /// H.265 / HEVC (requires kvazaar).
+    H265,
 }
 
 /// CLI argument for aspect ratio handling.
@@ -350,6 +365,7 @@ fn main() -> Result<()> {
             aspect_mode,
             crop,
             volume,
+            codec,
             format,
         } => process(
             &ProcessArgs {
@@ -363,6 +379,7 @@ fn main() -> Result<()> {
                 aspect_mode_arg: &aspect_mode,
                 crop: crop.as_deref(),
                 volume: volume.as_deref(),
+                codec: codec.as_ref(),
             },
             &format,
         ),
@@ -389,6 +406,7 @@ fn main() -> Result<()> {
                     aspect_mode_arg: &AspectModeArg::Fit,
                     crop: None,
                     volume: None,
+                    codec: None,
                 },
                 &OutputFormat::Text,
             )
@@ -416,6 +434,7 @@ fn main() -> Result<()> {
                     aspect_mode_arg: &aspect_mode,
                     crop: None,
                     volume: None,
+                    codec: None,
                 },
                 &format,
             )
@@ -1307,6 +1326,7 @@ struct ProcessArgs<'a> {
     aspect_mode_arg: &'a AspectModeArg,
     crop: Option<&'a str>,
     volume: Option<&'a str>,
+    codec: Option<&'a VideoCodecArg>,
 }
 
 fn process(args: &ProcessArgs<'_>, format: &OutputFormat) -> Result<()> {
@@ -1406,7 +1426,8 @@ fn process_inner(args: &ProcessArgs<'_>, json_mode: bool) -> Result<TranscodeOut
         || args.max_fps.is_some()
         || args.resize.is_some()
         || args.crop.is_some()
-        || args.volume.is_some();
+        || args.volume.is_some()
+        || args.codec.is_some();
 
     let effective_preset = args.preset.unwrap_or(&EncodePreset::Medium);
 
@@ -1704,17 +1725,18 @@ fn process_inner(args: &ProcessArgs<'_>, json_mode: bool) -> Result<TranscodeOut
             }
         }
 
-        // Select encoder based on output container
-        let use_av1_encode = matches!(out_container, ContainerFormat::WebM);
+        // Select encoder based on output container and --codec flag
+        let use_av1 = matches!(out_container, ContainerFormat::WebM);
+        let use_h265 = matches!(args.codec, Some(VideoCodecArg::H265));
 
-        if use_av1_encode {
-            // Determine encode dimensions (resize overrides source)
-            let (enc_w, enc_h) = if let Some(resize_str) = args.resize {
-                parse_resize(resize_str)?
-            } else {
-                (*src_width, *src_height)
-            };
+        // Determine encode dimensions (resize overrides source)
+        let (enc_w, enc_h) = if let Some(resize_str) = args.resize {
+            parse_resize(resize_str)?
+        } else {
+            (*src_width, *src_height)
+        };
 
+        if use_av1 {
             let mut enc_builder = Av1EncoderBuilder::new()
                 .quality(quality_target)
                 .track_index(*track_idx)
@@ -1732,6 +1754,25 @@ fn process_inner(args: &ProcessArgs<'_>, json_mode: bool) -> Result<TranscodeOut
                 .wrap_err("failed to create AV1 encoder")?;
 
             builder = builder.with_encoder(*track_idx, encoder);
+        } else if use_h265 {
+            let mut enc_builder = H265EncoderBuilder::new()
+                .quality(quality_target)
+                .track_index(*track_idx)
+                .dimensions(enc_w, enc_h)
+                .max_frame_rate(frame_rate_hint);
+
+            if let Some(cs) = color_space {
+                enc_builder = enc_builder.color_space(*cs);
+            }
+
+            let encoder = enc_builder
+                .build()
+                .into_diagnostic()
+                .wrap_err("failed to create H.265 encoder")?;
+
+            builder = builder
+                .with_encoder(*track_idx, encoder)
+                .with_output_codec(*track_idx, Codec::Video(VideoCodec::H265));
         } else {
             let mut enc_builder = H264EncoderBuilder::new()
                 .quality(quality_target)

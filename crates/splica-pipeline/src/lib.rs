@@ -11,7 +11,7 @@ use std::collections::HashMap;
 
 pub use event::{PipelineEvent, PipelineEventKind};
 use splica_core::{
-    AudioDecoder, AudioEncoder, AudioFilter, Decoder, Demuxer, Encoder, Frame, Muxer,
+    AudioDecoder, AudioEncoder, AudioFilter, Codec, Decoder, Demuxer, Encoder, Frame, Muxer,
     PipelineError, TrackIndex, ValidationError, VideoFilter,
 };
 
@@ -92,6 +92,7 @@ pub struct PipelineBuilder<F = fn(PipelineEvent)> {
     audio_decoders: HashMap<TrackIndex, Box<dyn AudioDecoder>>,
     audio_encoders: HashMap<TrackIndex, Box<dyn AudioEncoder>>,
     audio_filters: HashMap<TrackIndex, Vec<Box<dyn AudioFilter>>>,
+    output_codecs: HashMap<TrackIndex, Codec>,
 }
 
 impl PipelineBuilder {
@@ -107,6 +108,7 @@ impl PipelineBuilder {
             audio_decoders: HashMap::new(),
             audio_encoders: HashMap::new(),
             audio_filters: HashMap::new(),
+            output_codecs: HashMap::new(),
         }
     }
 }
@@ -130,6 +132,7 @@ impl<F: Fn(PipelineEvent)> PipelineBuilder<F> {
             audio_decoders: self.audio_decoders,
             audio_encoders: self.audio_encoders,
             audio_filters: self.audio_filters,
+            output_codecs: self.output_codecs,
         }
     }
 
@@ -212,6 +215,17 @@ impl<F: Fn(PipelineEvent)> PipelineBuilder<F> {
             .entry(track)
             .or_default()
             .push(Box::new(filter));
+        self
+    }
+
+    /// Overrides the codec reported to the muxer for a specific track.
+    ///
+    /// When an encoder produces a different codec than the input (e.g., H.264
+    /// input transcoded to H.265), the muxer needs to know the output codec
+    /// to write the correct sample description. This override is applied to
+    /// the track info before calling `Muxer::add_track`.
+    pub fn with_output_codec(mut self, track: TrackIndex, codec: Codec) -> Self {
+        self.output_codecs.insert(track, codec);
         self
     }
 
@@ -317,6 +331,7 @@ impl<F: Fn(PipelineEvent)> PipelineBuilder<F> {
             demuxer,
             muxer,
             track_modes,
+            output_codecs: self.output_codecs,
             on_event: self.on_event,
         })
     }
@@ -338,6 +353,7 @@ pub struct Pipeline<F = fn(PipelineEvent)> {
     demuxer: Box<dyn Demuxer>,
     muxer: Box<dyn Muxer>,
     track_modes: HashMap<TrackIndex, TrackMode>,
+    output_codecs: HashMap<TrackIndex, Codec>,
     on_event: Option<F>,
 }
 
@@ -495,11 +511,18 @@ impl<F: Fn(PipelineEvent)> Pipeline<F> {
     /// appropriate decode→encode path or copy mode, then writes to the muxer.
     /// Flushes decoders and encoders at end-of-stream and finalizes the muxer.
     pub fn run(&mut self) -> Result<(), PipelineError> {
-        // Register all input tracks with the muxer
+        // Register all input tracks with the muxer, applying codec overrides
         let tracks = self.demuxer.tracks().to_vec();
         let mut input_to_output: HashMap<TrackIndex, TrackIndex> = HashMap::new();
         for track_info in &tracks {
-            let output_idx = self.muxer.add_track(track_info)?;
+            let info = if let Some(codec) = self.output_codecs.get(&track_info.index) {
+                let mut overridden = track_info.clone();
+                overridden.codec = codec.clone();
+                overridden
+            } else {
+                track_info.clone()
+            };
+            let output_idx = self.muxer.add_track(&info)?;
             input_to_output.insert(track_info.index, output_idx);
         }
 

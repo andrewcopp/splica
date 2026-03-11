@@ -722,6 +722,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "kvazaar-sys"
+version = "0.1.0"
+dependencies = [
+ "pkg-config",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1446,6 +1453,7 @@ dependencies = [
  "bytes",
  "dav1d",
  "fdk-aac",
+ "kvazaar-sys",
  "libde265",
  "num-traits",
  "openh264",
