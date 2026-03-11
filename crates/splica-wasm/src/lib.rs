@@ -28,6 +28,8 @@
 //! wasm-pack build --target web crates/splica-wasm
 //! ```
 
-pub use splica_core::wasm_types::{WasmVideoDecoderConfig, WasmVideoPacket};
+pub use splica_core::wasm_types::{
+    WasmAudioDecoderConfig, WasmAudioPacket, WasmVideoDecoderConfig, WasmVideoPacket,
+};
 pub use splica_mp4::wasm::WasmMp4Demuxer;
 pub use splica_webm::wasm::WasmWebmDemuxer;

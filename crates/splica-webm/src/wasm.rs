@@ -8,9 +8,12 @@ use std::io::Cursor;
 use wasm_bindgen::prelude::*;
 
 use splica_core::wasm_types::{
-    audio_track_info_json, video_track_info_json, WasmVideoDecoderConfig, WasmVideoPacket,
+    audio_track_info_json, video_track_info_json, WasmAudioDecoderConfig, WasmAudioPacket,
+    WasmVideoDecoderConfig, WasmVideoPacket,
 };
-use splica_core::{Codec, Demuxer, SeekMode, Seekable, Timestamp, TrackKind, VideoCodec};
+use splica_core::{
+    AudioCodec, Codec, Demuxer, SeekMode, Seekable, Timestamp, TrackKind, VideoCodec,
+};
 
 use crate::WebmDemuxer;
 
@@ -203,6 +206,100 @@ impl WasmWebmDemuxer {
             }
         }
     }
+
+    /// Reads the next audio packet, skipping video packets.
+    ///
+    /// Returns a `WasmAudioPacket` with compressed data, presentation
+    /// timestamp in microseconds, duration, and keyframe flag. Returns null
+    /// at end-of-stream or if no audio track is present.
+    #[wasm_bindgen(js_name = "readAudioPacket")]
+    pub fn read_audio_packet(&mut self) -> Result<Option<WasmAudioPacket>, JsValue> {
+        let audio_index = self
+            .inner
+            .tracks()
+            .iter()
+            .find(|t| t.kind == TrackKind::Audio)
+            .map(|t| t.index);
+
+        let audio_index = match audio_index {
+            Some(idx) => idx,
+            None => return Ok(None),
+        };
+
+        loop {
+            match self.inner.read_packet() {
+                Ok(Some(packet)) => {
+                    if packet.track_index == audio_index {
+                        let timestamp_us = packet.pts.as_seconds_f64() * 1_000_000.0;
+                        return Ok(Some(WasmAudioPacket::new(
+                            packet.data.to_vec(),
+                            timestamp_us,
+                            -1.0,
+                            packet.is_keyframe,
+                        )));
+                    }
+                    // Skip non-audio packets
+                }
+                Ok(None) => return Ok(None),
+                Err(e) => return Err(JsValue::from_str(&e.to_string())),
+            }
+        }
+    }
+
+    /// Returns a WebCodecs-compatible `AudioDecoderConfig`, or null if no
+    /// audio track is present.
+    ///
+    /// Supports Opus audio tracks. Returns an error if the audio track uses
+    /// an unsupported or unknown codec.
+    ///
+    /// The returned config contains:
+    /// - `codec`: WebCodecs codec string (e.g., `"opus"`)
+    /// - `description`: raw CodecPrivate bytes (OpusHead) for `AudioDecoderConfig.description`
+    /// - `sampleRate`: audio sample rate in Hz
+    /// - `numberOfChannels`: number of audio channels
+    #[wasm_bindgen(js_name = "audioDecoderConfig")]
+    pub fn audio_decoder_config(&self) -> Result<Option<WasmAudioDecoderConfig>, JsValue> {
+        let audio_track = self
+            .inner
+            .tracks()
+            .iter()
+            .find(|t| t.kind == TrackKind::Audio);
+
+        let track = match audio_track {
+            Some(t) => t,
+            None => return Ok(None),
+        };
+
+        let audio_info = match &track.audio {
+            Some(a) => a,
+            None => return Ok(None),
+        };
+
+        let codec_private = self.inner.codec_private(track.index);
+        let channels = audio_info
+            .channel_layout
+            .map(|cl| cl.channel_count())
+            .unwrap_or(1);
+
+        match &track.codec {
+            Codec::Audio(AudioCodec::Opus) => {
+                let description = codec_private.map(|d| d.to_vec()).unwrap_or_default();
+                Ok(Some(WasmAudioDecoderConfig::new(
+                    "opus".to_string(),
+                    description,
+                    audio_info.sample_rate,
+                    channels,
+                )))
+            }
+            Codec::Audio(AudioCodec::Aac) => Err(JsValue::from_str("AAC in WebM is not supported")),
+            Codec::Audio(AudioCodec::Other(name)) => Err(JsValue::from_str(&format!(
+                "unsupported audio codec in WebM: {name}"
+            ))),
+            Codec::Video(_) => Err(JsValue::from_str(
+                "audio track has video codec (unexpected)",
+            )),
+        }
+    }
 }
 
 /// Builds a WebCodecs VP9 codec string from CodecPrivate data.
@@ -238,4 +335,43 @@ fn build_vp9_codec_string(codec_private: Option<&[u8]>) -> String {
     }
 
     format!("vp09.{profile:02}.{level:02}.{bit_depth:02}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_that_read_audio_packet_returns_none_for_video_only_webm() {
+        // GIVEN — a WebM with only a video track
+        let webm_data =
+            std::fs::read("../../tests/fixtures/bigbuckbunny_vp9.webm").expect("fixture missing");
+        let mut demuxer = WasmWebmDemuxer {
+            inner: WebmDemuxer::open(Cursor::new(webm_data)).expect("failed to open webm"),
+        };
+
+        // WHEN
+        let result = demuxer.read_audio_packet();
+
+        // THEN — returns Ok(None) since there is no audio track
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none());
+    }
+
+    #[test]
+    fn test_that_audio_decoder_config_returns_none_for_video_only_webm() {
+        // GIVEN — a WebM with only a video track
+        let webm_data =
+            std::fs::read("../../tests/fixtures/bigbuckbunny_vp9.webm").expect("fixture missing");
+        let demuxer = WasmWebmDemuxer {
+            inner: WebmDemuxer::open(Cursor::new(webm_data)).expect("failed to open webm"),
+        };
+
+        // WHEN
+        let result = demuxer.audio_decoder_config();
+
+        // THEN — returns Ok(None) since there is no audio track
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none());
+    }
 }
