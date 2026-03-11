@@ -168,6 +168,36 @@ fn test_that_probe_json_reports_null_color_space_for_bbb_h264() {
 }
 
 // ---------------------------------------------------------------------------
+// Process JSON output contract
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_that_process_json_includes_audio_tracks_array() {
+    let output = splica_binary()
+        .args([
+            "process",
+            "-i",
+            &fixture_path("bigbuckbunny_h264.mp4"),
+            "-o",
+            "/tmp/splica_test_json_contract.mp4",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+
+    assert_eq!(json["status"], "ok");
+    assert!(json["audio_tracks"].is_array());
+
+    // Clean up
+    let _ = std::fs::remove_file("/tmp/splica_test_json_contract.mp4");
+}
+
+// ---------------------------------------------------------------------------
 // Error handling
 // ---------------------------------------------------------------------------
 
