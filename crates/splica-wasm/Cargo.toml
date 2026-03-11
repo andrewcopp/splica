@@ -1,0 +1,16 @@
+[package]
+name = "splica-wasm"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "WASM bindings for the splica media processing library"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+splica-mp4 = { workspace = true, features = ["wasm"] }
+splica-webm = { workspace = true, features = ["wasm"] }
+wasm-bindgen = "0.2"

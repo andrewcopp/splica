@@ -566,6 +566,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "splica-wasm"
+version = "0.1.0"
+dependencies = [
+ "splica-mp4",
+ "splica-webm",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "splica-webm"
 version = "0.1.0"
 dependencies = [

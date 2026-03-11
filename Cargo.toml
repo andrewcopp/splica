@@ -7,6 +7,7 @@ members = [
     "crates/splica-codec",
     "crates/splica-filter",
     "crates/splica-pipeline",
+    "crates/splica-wasm",
     "crates/splica-cli",
 ]
 resolver = "2"
