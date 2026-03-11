@@ -4,6 +4,7 @@
 //! All FFI interaction with OpenH264 is confined to this module.
 
 pub mod avcc;
+pub(crate) mod sps;
 
 #[cfg(feature = "codec-h264")]
 mod decoder;

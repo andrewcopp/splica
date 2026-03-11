@@ -15,6 +15,7 @@ use openh264::formats::YUVSource;
 use crate::error::CodecError;
 
 use super::avcc::{self, AvcDecoderConfig};
+use super::sps;
 
 /// H.264 codec-specific configuration parameters.
 ///
@@ -97,6 +98,8 @@ pub struct H264Decoder {
     pending_frame: Option<VideoFrame>,
     /// Whether end-of-stream has been signaled.
     flushing: bool,
+    /// Color space parsed from the SPS VUI parameters.
+    color_space: Option<ColorSpace>,
 }
 
 impl H264Decoder {
@@ -106,6 +109,13 @@ impl H264Decoder {
     /// It contains the SPS/PPS parameter sets needed to initialize the decoder.
     pub fn new(avcc_data: &[u8]) -> Result<Self, CodecError> {
         let avcc_config = AvcDecoderConfig::parse(avcc_data)?;
+
+        // Extract color space from the first SPS VUI parameters, if present.
+        let color_space = avcc_config
+            .sps
+            .first()
+            .and_then(|sps_nalu| sps::parse_sps_color_info(sps_nalu))
+            .map(|info| info.color_space);
 
         // SAFETY: openh264::decoder::Decoder::new() is a safe API that internally
         // calls WelsCreateDecoder via FFI. The openh264 crate manages the raw
@@ -120,6 +130,7 @@ impl H264Decoder {
             initialized: false,
             pending_frame: None,
             flushing: false,
+            color_space,
         })
     }
 
@@ -256,7 +267,7 @@ impl Decoder for H264Decoder {
                 // Decode the packet
                 match self.inner.decode(&annex_b) {
                     Ok(Some(yuv)) => {
-                        let frame = Self::yuv_to_video_frame(&yuv, pkt.pts, None)?;
+                        let frame = Self::yuv_to_video_frame(&yuv, pkt.pts, self.color_space)?;
                         self.pending_frame = Some(frame);
                     }
                     Ok(None) => {
@@ -284,7 +295,7 @@ impl Decoder for H264Decoder {
                             // Use a zero timestamp for flushed frames — caller
                             // should use the last known PTS
                             let pts = splica_core::Timestamp::new(0, 1).unwrap();
-                            let frame = Self::yuv_to_video_frame(yuv, pts, None)?;
+                            let frame = Self::yuv_to_video_frame(yuv, pts, self.color_space)?;
                             self.pending_frame = Some(frame);
                         } else {
                             self.pending_frame = None;
