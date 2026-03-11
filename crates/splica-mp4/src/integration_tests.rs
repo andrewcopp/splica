@@ -4,6 +4,7 @@ use std::io::Cursor;
 
 use splica_core::{AudioCodec, Codec, Demuxer, Muxer, ResourceBudget, TrackKind, VideoCodec};
 
+use crate::boxes::hdlr::HandlerType;
 use crate::demuxer::Mp4Demuxer;
 use crate::error::Mp4Error;
 use crate::test_helpers::{self, TestTrack};
@@ -735,4 +736,29 @@ fn sum_mdat_body_bytes(data: &[u8]) -> usize {
         pos += size;
     }
     total
+}
+
+#[test]
+fn test_that_hint_track_is_excluded_from_parsed_tracks() {
+    // GIVEN — a synthetic MP4 with a video track and a hint track
+    let hint_track = TestTrack {
+        track_id: 2,
+        handler: HandlerType::Other(*b"hint"),
+        timescale: 90000,
+        sample_sizes: vec![100; 5],
+        sample_delta: 3000,
+        sync_samples: None,
+        width: 0,
+        height: 0,
+        sample_rate: 0,
+        channel_count: 0,
+    };
+    let mp4 = test_helpers::build_test_mp4(&[TestTrack::video(320, 240, 5), hint_track]);
+
+    // WHEN
+    let demuxer = Mp4Demuxer::open(Cursor::new(mp4)).unwrap();
+
+    // THEN — only the video track is exposed
+    assert_eq!(demuxer.tracks().len(), 1);
+    assert_eq!(demuxer.tracks()[0].kind, TrackKind::Video);
 }
