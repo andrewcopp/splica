@@ -13,9 +13,9 @@ pub use error::{
 };
 pub use media::{
     AudioCodec, AudioFrame, AudioTrackInfo, ChannelLayout, Codec, ColorPrimaries, ColorRange,
-    ColorSpace, Frame, FrameRate, MatrixCoefficients, Packet, PixelFormat, PlaneLayout,
-    ResourceBudget, SampleFormat, TrackIndex, TrackInfo, TrackKind, TransferCharacteristics,
-    VideoCodec, VideoFrame, VideoFrameError, VideoTrackInfo,
+    ColorSpace, ContainerFormat, Frame, FrameRate, MatrixCoefficients, Packet, PixelFormat,
+    PlaneLayout, ResourceBudget, SampleFormat, TrackIndex, TrackInfo, TrackKind,
+    TransferCharacteristics, VideoCodec, VideoFrame, VideoFrameError, VideoTrackInfo,
 };
 pub use smpte::SmpteTimecode;
 pub use timestamp::Timestamp;

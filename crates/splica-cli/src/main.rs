@@ -11,8 +11,8 @@ use splica_codec::{
     OpusEncoderBuilder,
 };
 use splica_core::{
-    AudioCodec, Codec, DecodeError, DemuxError, Demuxer, EncodeError, ErrorKind, FilterError,
-    MuxError, Muxer, PipelineError, TrackIndex, TrackKind, VideoCodec,
+    AudioCodec, Codec, ContainerFormat, DecodeError, DemuxError, Demuxer, EncodeError, ErrorKind,
+    FilterError, MuxError, Muxer, PipelineError, TrackIndex, TrackKind, VideoCodec,
 };
 use splica_filter::{AspectMode, ScaleFilter, VolumeFilter};
 use splica_mp4::boxes::stsd::CodecConfig;
@@ -404,27 +404,24 @@ fn main() -> Result<()> {
 /// Validates that the output file extension is a format splica can write.
 /// Fails fast before any input is read, with a helpful error message.
 fn validate_output_format(output: &Path) -> Result<()> {
-    let ext = output
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_lowercase();
+    let ext = output.extension().and_then(|e| e.to_str()).unwrap_or("");
 
-    match ext.as_str() {
-        "mp4" | "m4v" | "m4a" | "webm" => Ok(()),
-        "mkv" | "mka" => Err(miette::miette!(
+    match ContainerFormat::from_extension(ext) {
+        Some(fmt) if fmt.is_writable() => Ok(()),
+        Some(ContainerFormat::Mkv) => Err(miette::miette!(
             "output format 'mkv' is not yet supported for writing\n  \
-             → splica can currently write: mp4\n  \
+             → splica can currently write: mp4, webm\n  \
              → MKV output is planned for a future release"
         )),
-        "" => Err(miette::miette!(
+        Some(_) => Ok(()), // unreachable since all recognized formats are handled above
+        None if ext.is_empty() => Err(miette::miette!(
             "output file has no extension — cannot determine output format\n  \
-             → Use a recognized extension: .mp4"
+             → Use a recognized extension: .mp4, .webm"
         )),
-        other => Err(miette::miette!(
-            "unsupported output format '.{other}'\n  \
-             → splica can currently write: mp4\n  \
-             → Supported extensions: .mp4, .m4v, .m4a"
+        None => Err(miette::miette!(
+            "unsupported output format '.{ext}'\n  \
+             → splica can currently write: mp4, webm\n  \
+             → Supported extensions: .mp4, .m4v, .m4a, .webm"
         )),
     }
 }
@@ -487,14 +484,14 @@ fn parse_time(s: &str) -> Result<f64> {
 // Format detection
 // ---------------------------------------------------------------------------
 
-/// Detected container format.
-enum ContainerFormat {
+/// Detected input container format (from magic bytes).
+enum DetectedFormat {
     Mp4,
     WebM,
 }
 
 /// Sniffs the container format from the first few bytes of a file.
-fn detect_format(file: &mut (impl Read + Seek)) -> Result<ContainerFormat> {
+fn detect_format(file: &mut (impl Read + Seek)) -> Result<DetectedFormat> {
     let mut magic = [0u8; 12];
     let bytes_read = file
         .read(&mut magic)
@@ -512,12 +509,12 @@ fn detect_format(file: &mut (impl Read + Seek)) -> Result<ContainerFormat> {
 
     // WebM/Matroska: EBML header starts with 0x1A 0x45 0xDF 0xA3
     if magic[0] == 0x1A && magic[1] == 0x45 && magic[2] == 0xDF && magic[3] == 0xA3 {
-        return Ok(ContainerFormat::WebM);
+        return Ok(DetectedFormat::WebM);
     }
 
     // MP4: "ftyp" box at bytes 4-7
     if bytes_read >= 8 && &magic[4..8] == b"ftyp" {
-        return Ok(ContainerFormat::Mp4);
+        return Ok(DetectedFormat::Mp4);
     }
 
     Err(miette::miette!(
@@ -543,11 +540,9 @@ fn is_video_codec_compatible(codec: &Codec, output_is_webm: bool) -> bool {
     }
 }
 
-fn is_webm_output(path: &Path) -> bool {
-    path.extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_lowercase() == "webm")
-        .unwrap_or(false)
+fn output_container(path: &Path) -> Option<ContainerFormat> {
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    ContainerFormat::from_extension(ext)
 }
 
 /// Opens a demuxer for the given file, auto-detecting the container format.
@@ -559,13 +554,13 @@ fn open_demuxer(path: &Path) -> Result<Box<dyn Demuxer>> {
     let format = detect_format(&mut file)?;
 
     match format {
-        ContainerFormat::Mp4 => {
+        DetectedFormat::Mp4 => {
             let demuxer = Mp4Demuxer::open(file)
                 .into_diagnostic()
                 .wrap_err("failed to parse MP4 container")?;
             Ok(Box::new(demuxer))
         }
-        ContainerFormat::WebM => {
+        DetectedFormat::WebM => {
             let demuxer = WebmDemuxer::open(BufReader::new(file))
                 .into_diagnostic()
                 .wrap_err("failed to parse WebM container")?;
@@ -580,7 +575,7 @@ fn create_muxer(output: &Path) -> Result<Box<dyn Muxer>> {
         .into_diagnostic()
         .wrap_err_with(|| format!("could not create output file '{}'", output.display()))?;
 
-    if is_webm_output(output) {
+    if output_container(output) == Some(ContainerFormat::WebM) {
         Ok(Box::new(WebmMuxer::new(BufWriter::new(out_file))))
     } else {
         Ok(Box::new(Mp4Muxer::new(BufWriter::new(out_file))))
@@ -774,7 +769,8 @@ fn stream_copy(args: &ProcessArgs<'_>, json_mode: bool) -> Result<TranscodeOutpu
         .into_diagnostic()
         .wrap_err_with(|| format!("could not create output file '{}'", args.output.display()))?;
 
-    let mut muxer: Box<dyn Muxer> = if is_webm_output(args.output) {
+    let mut muxer: Box<dyn Muxer> = if output_container(args.output) == Some(ContainerFormat::WebM)
+    {
         Box::new(WebmMuxer::new(BufWriter::new(out_file)))
     } else {
         Box::new(Mp4Muxer::new(BufWriter::new(out_file)))
@@ -1294,7 +1290,7 @@ fn process_inner(args: &ProcessArgs<'_>, json_mode: bool) -> Result<TranscodeOut
     let format = detect_format(&mut file)?;
 
     let (demuxer, video_track_configs, audio_track_configs): DemuxerWithConfigs = match format {
-        ContainerFormat::Mp4 => {
+        DetectedFormat::Mp4 => {
             let mp4 = Mp4Demuxer::open(file)
                 .into_diagnostic()
                 .wrap_err("failed to parse MP4 container")?;
@@ -1358,7 +1354,7 @@ fn process_inner(args: &ProcessArgs<'_>, json_mode: bool) -> Result<TranscodeOut
             }
             (Box::new(mp4), video_configs, audio_configs)
         }
-        ContainerFormat::WebM => {
+        DetectedFormat::WebM => {
             let webm = WebmDemuxer::open(BufReader::new(file))
                 .into_diagnostic()
                 .wrap_err("failed to parse WebM container")?;
@@ -1387,7 +1383,7 @@ fn process_inner(args: &ProcessArgs<'_>, json_mode: bool) -> Result<TranscodeOut
     };
 
     // Determine target audio codec based on output container
-    let output_is_webm = is_webm_output(args.output);
+    let output_is_webm = output_container(args.output) == Some(ContainerFormat::WebM);
     let target_audio_codec = if output_is_webm {
         splica_core::AudioCodec::Opus
     } else {

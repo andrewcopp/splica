@@ -87,6 +87,40 @@ impl ResourceBudget {
 }
 
 // ---------------------------------------------------------------------------
+// Container format
+// ---------------------------------------------------------------------------
+
+/// Container format for muxed output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ContainerFormat {
+    Mp4,
+    WebM,
+    Mkv,
+}
+
+impl ContainerFormat {
+    /// Returns the `ContainerFormat` for a given file extension (case-insensitive).
+    ///
+    /// Returns `None` for unrecognized extensions.
+    pub fn from_extension(ext: &str) -> Option<Self> {
+        match ext.to_lowercase().as_str() {
+            "mp4" | "m4v" | "m4a" => Some(Self::Mp4),
+            "webm" => Some(Self::WebM),
+            "mkv" | "mka" => Some(Self::Mkv),
+            _ => None,
+        }
+    }
+
+    /// Returns true if splica currently supports writing this format.
+    pub fn is_writable(self) -> bool {
+        match self {
+            Self::Mp4 | Self::WebM => true,
+            Self::Mkv => false,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Codec identification
 // ---------------------------------------------------------------------------
 
@@ -577,6 +611,63 @@ pub struct AudioTrackInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_that_container_format_from_extension_recognizes_mp4_variants() {
+        assert_eq!(
+            ContainerFormat::from_extension("mp4"),
+            Some(ContainerFormat::Mp4)
+        );
+        assert_eq!(
+            ContainerFormat::from_extension("m4v"),
+            Some(ContainerFormat::Mp4)
+        );
+        assert_eq!(
+            ContainerFormat::from_extension("m4a"),
+            Some(ContainerFormat::Mp4)
+        );
+        assert_eq!(
+            ContainerFormat::from_extension("MP4"),
+            Some(ContainerFormat::Mp4)
+        );
+    }
+
+    #[test]
+    fn test_that_container_format_from_extension_recognizes_webm() {
+        assert_eq!(
+            ContainerFormat::from_extension("webm"),
+            Some(ContainerFormat::WebM)
+        );
+        assert_eq!(
+            ContainerFormat::from_extension("WEBM"),
+            Some(ContainerFormat::WebM)
+        );
+    }
+
+    #[test]
+    fn test_that_container_format_from_extension_recognizes_mkv_variants() {
+        assert_eq!(
+            ContainerFormat::from_extension("mkv"),
+            Some(ContainerFormat::Mkv)
+        );
+        assert_eq!(
+            ContainerFormat::from_extension("mka"),
+            Some(ContainerFormat::Mkv)
+        );
+    }
+
+    #[test]
+    fn test_that_container_format_from_extension_returns_none_for_unknown() {
+        assert_eq!(ContainerFormat::from_extension("avi"), None);
+        assert_eq!(ContainerFormat::from_extension(""), None);
+    }
+
+    #[test]
+    fn test_that_mp4_and_webm_are_writable_but_mkv_is_not() {
+        assert!(ContainerFormat::Mp4.is_writable());
+        assert!(ContainerFormat::WebM.is_writable());
+        assert!(!ContainerFormat::Mkv.is_writable());
+    }
 
     #[test]
     fn test_that_packet_is_owned_and_cloneable() {
