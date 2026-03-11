@@ -83,8 +83,10 @@ impl WasmWebmDemuxer {
 
     /// Returns a WebCodecs-compatible `VideoDecoderConfig`, or null if no video track.
     ///
-    /// VP9 uses `"vp09.00.10.08"` as the default codec string. VP9 bitstreams
-    /// are self-delimiting, so `description` is empty.
+    /// Parses the VP9 CodecPrivate data to build an accurate codec string.
+    /// Falls back to `"vp09.00.10.08"` (profile 0, level 1.0, 8-bit) when
+    /// CodecPrivate is absent. VP9 bitstreams are self-delimiting, so
+    /// `description` is empty.
     #[wasm_bindgen(js_name = "videoDecoderConfig")]
     pub fn video_decoder_config(&self) -> Result<Option<WasmVideoDecoderConfig>, JsValue> {
         let video_track = self
@@ -103,7 +105,8 @@ impl WasmWebmDemuxer {
             None => return Ok(None),
         };
 
-        let codec_string = build_vp9_codec_string();
+        let codec_private = self.inner.codec_private(track.index);
+        let codec_string = build_vp9_codec_string(codec_private);
         Ok(Some(WasmVideoDecoderConfig::new(
             codec_string,
             video.width,
@@ -150,9 +153,37 @@ impl WasmWebmDemuxer {
     }
 }
 
-/// Builds a WebCodecs VP9 codec string.
+/// Builds a WebCodecs VP9 codec string from CodecPrivate data.
 ///
-/// Default: `"vp09.00.10.08"` (profile 0, level 1.0, 8-bit).
-fn build_vp9_codec_string() -> String {
-    "vp09.00.10.08".to_string()
+/// Parses VP Codec ISO Media File Format features (profile, level, bit depth)
+/// from the CodecPrivate bytes. Falls back to `"vp09.00.10.08"` (profile 0,
+/// level 1.0, 8-bit) when CodecPrivate is absent or too short to parse.
+fn build_vp9_codec_string(codec_private: Option<&[u8]>) -> String {
+    let mut profile: u8 = 0;
+    let mut level: u8 = 10;
+    let mut bit_depth: u8 = 8;
+
+    if let Some(data) = codec_private {
+        // VP Codec ISO Media File Format: sequence of (id: u8, length: u8, value: [u8])
+        let mut pos = 0;
+        while pos + 2 <= data.len() {
+            let id = data[pos];
+            let len = data[pos + 1] as usize;
+            pos += 2;
+            if pos + len > data.len() {
+                break;
+            }
+            if len == 1 {
+                match id {
+                    1 => profile = data[pos],
+                    2 => level = data[pos],
+                    3 => bit_depth = data[pos],
+                    _ => {}
+                }
+            }
+            pos += len;
+        }
+    }
+
+    format!("vp09.{profile:02}.{level:02}.{bit_depth:02}")
 }

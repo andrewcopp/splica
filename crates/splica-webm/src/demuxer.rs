@@ -24,7 +24,6 @@ struct WebmTrack {
     /// Codec identifier string (e.g., "V_VP9", "A_OPUS").
     codec_id: String,
     /// Optional codec private data (used for codec initialization).
-    #[allow(dead_code)]
     codec_private: Option<Vec<u8>>,
     /// Video dimensions (if video track).
     width: Option<u32>,
@@ -290,6 +289,13 @@ impl<R: Read + Seek> WebmDemuxer<R> {
             .iter()
             .position(|t| t.track_number == track_number)
             .map(|i| TrackIndex(i as u32))
+    }
+
+    /// Returns the codec private data for a given track index, if present.
+    pub fn codec_private(&self, track: TrackIndex) -> Option<&[u8]> {
+        self.webm_tracks
+            .get(track.0 as usize)
+            .and_then(|t| t.codec_private.as_deref())
     }
 }
 
