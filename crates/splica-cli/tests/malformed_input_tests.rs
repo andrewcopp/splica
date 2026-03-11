@@ -77,7 +77,7 @@ fn test_that_probe_json_of_zero_byte_file_reports_bad_input() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let json: serde_json::Value =
         serde_json::from_str(&stdout).expect("error output should be valid JSON");
-    assert_eq!(json["status"], "error");
+    assert_eq!(json["type"], "error");
     assert_eq!(json["error_kind"], "bad_input");
 
     let _ = std::fs::remove_file(&path);
@@ -134,7 +134,7 @@ fn test_that_probe_json_of_corrupt_header_reports_bad_input() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let json: serde_json::Value =
         serde_json::from_str(&stdout).expect("error output should be valid JSON");
-    assert_eq!(json["status"], "error");
+    assert_eq!(json["type"], "error");
     assert_eq!(json["error_kind"], "bad_input");
 
     let _ = std::fs::remove_file(&path);
@@ -181,7 +181,7 @@ fn test_that_process_json_of_corrupt_header_reports_bad_input() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let json: serde_json::Value =
         serde_json::from_str(&stdout).expect("error output should be valid JSON");
-    assert_eq!(json["status"], "error");
+    assert_eq!(json["type"], "error");
     assert_eq!(json["error_kind"], "bad_input");
 
     let _ = std::fs::remove_file(&input);
@@ -231,7 +231,7 @@ fn test_that_probe_json_of_truncated_mp4_reports_bad_input() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let json: serde_json::Value =
         serde_json::from_str(&stdout).expect("error output should be valid JSON");
-    assert_eq!(json["status"], "error");
+    assert_eq!(json["type"], "error");
     assert_eq!(json["error_kind"], "bad_input");
 
     let _ = std::fs::remove_file(&path);
@@ -308,7 +308,7 @@ fn test_that_probe_json_of_extension_mismatch_reports_bad_input() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let json: serde_json::Value =
         serde_json::from_str(&stdout).expect("error output should be valid JSON");
-    assert_eq!(json["status"], "error");
+    assert_eq!(json["type"], "error");
     assert_eq!(json["error_kind"], "bad_input");
 
     let _ = std::fs::remove_file(&path);
@@ -355,7 +355,7 @@ fn test_that_probe_json_of_truncated_webm_reports_bad_input() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let json: serde_json::Value =
         serde_json::from_str(&stdout).expect("error output should be valid JSON");
-    assert_eq!(json["status"], "error");
+    assert_eq!(json["type"], "error");
     assert_eq!(json["error_kind"], "bad_input");
 
     let _ = std::fs::remove_file(&path);

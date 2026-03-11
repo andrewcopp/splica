@@ -190,7 +190,7 @@ fn test_that_process_json_includes_audio_tracks_array() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
 
-    assert_eq!(json["status"], "ok");
+    assert_eq!(json["type"], "complete");
     assert!(json["audio_tracks"].is_array());
 
     // Clean up

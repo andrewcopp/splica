@@ -214,8 +214,9 @@ mod exit_code {
 // ---------------------------------------------------------------------------
 
 #[derive(Serialize)]
-struct TranscodeResult {
-    status: String,
+struct CompleteEvent {
+    #[serde(rename = "type")]
+    event_type: &'static str,
     input: String,
     output: String,
     packets_read: u64,
@@ -242,7 +243,8 @@ enum AudioMode {
 
 #[derive(Serialize)]
 struct ProgressEvent {
-    status: String,
+    #[serde(rename = "type")]
+    event_type: &'static str,
     packets_read: u64,
     frames_decoded: u64,
     frames_encoded: u64,
@@ -251,7 +253,8 @@ struct ProgressEvent {
 
 #[derive(Serialize)]
 struct ErrorResult {
-    status: String,
+    #[serde(rename = "type")]
+    event_type: &'static str,
     error_kind: String,
     message: String,
 }
@@ -613,7 +616,7 @@ fn probe(file: &Path, format: &OutputFormat) -> Result<()> {
         if let Err(e) = result {
             let (error_kind, code) = classify_error(&e);
             let error_json = ErrorResult {
-                status: "error".to_string(),
+                event_type: "error",
                 error_kind: error_kind.to_string(),
                 message: format!("{e}"),
             };
@@ -1120,8 +1123,8 @@ fn process(args: &ProcessArgs<'_>, format: &OutputFormat) -> Result<()> {
     if json_mode {
         match result {
             Ok(out) => {
-                let output_json = TranscodeResult {
-                    status: "ok".to_string(),
+                let complete = CompleteEvent {
+                    event_type: "complete",
                     input: args.input.display().to_string(),
                     output: args.output.display().to_string(),
                     packets_read: out.packets_read,
@@ -1130,13 +1133,13 @@ fn process(args: &ProcessArgs<'_>, format: &OutputFormat) -> Result<()> {
                     packets_written: out.packets_written,
                     audio_tracks: out.audio_tracks,
                 };
-                println!("{}", serde_json::to_string(&output_json).unwrap());
+                println!("{}", serde_json::to_string(&complete).unwrap());
                 Ok(())
             }
             Err(e) => {
                 let (error_kind, code) = classify_error(&e);
                 let error_json = ErrorResult {
-                    status: "error".to_string(),
+                    event_type: "error",
                     error_kind: error_kind.to_string(),
                     message: format!("{e}"),
                 };
@@ -1370,7 +1373,7 @@ fn process_inner(args: &ProcessArgs<'_>, json_mode: bool) -> Result<TranscodeOut
                 if json_mode {
                     if count % 100 == 0 {
                         let progress = ProgressEvent {
-                            status: "progress".to_string(),
+                            event_type: "progress",
                             packets_read: count,
                             frames_decoded: fd.load(Ordering::Relaxed),
                             frames_encoded: fe.load(Ordering::Relaxed),
