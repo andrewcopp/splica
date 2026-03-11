@@ -187,6 +187,26 @@ fn test_that_scale_filter_rejects_non_yuv420p() {
 }
 
 #[test]
+fn test_that_scale_filter_preserves_color_space_when_scaling() {
+    let frame = make_yuv420_frame(640, 480, 128);
+    let mut filter = ScaleFilter::new(320, 240);
+
+    let result = filter.process(frame).unwrap();
+
+    assert_eq!(result.color_space, Some(ColorSpace::BT709));
+}
+
+#[test]
+fn test_that_scale_filter_preserves_color_space_on_noop() {
+    let frame = make_yuv420_frame(640, 480, 128);
+    let mut filter = ScaleFilter::new(640, 480);
+
+    let result = filter.process(frame).unwrap();
+
+    assert_eq!(result.color_space, Some(ColorSpace::BT709));
+}
+
+#[test]
 fn test_that_scale_filter_produces_valid_yuv420_planes() {
     let frame = make_yuv420_frame(640, 480, 128);
     let mut filter = ScaleFilter::new(320, 240);
