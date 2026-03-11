@@ -289,21 +289,21 @@ fn io_err(e: std::io::Error) -> MuxError {
 
 fn codec_to_webm_id(codec: &Codec) -> Result<String, MuxError> {
     match codec {
-        Codec::Video(VideoCodec::H264) => Ok("V_MPEG4/ISO/AVC".to_string()),
-        Codec::Video(VideoCodec::H265) => Ok("V_MPEGH/ISO/HEVC".to_string()),
-        Codec::Video(VideoCodec::Av1) => Ok("V_AV1".to_string()),
+        Codec::Video(VideoCodec::H264) => Ok(elements::CODEC_ID_H264.to_string()),
+        Codec::Video(VideoCodec::H265) => Ok(elements::CODEC_ID_H265.to_string()),
+        Codec::Video(VideoCodec::Av1) => Ok(elements::CODEC_ID_AV1.to_string()),
         Codec::Video(VideoCodec::Other(s)) => match s.as_str() {
-            "VP8" => Ok("V_VP8".to_string()),
-            "VP9" => Ok("V_VP9".to_string()),
+            "VP8" => Ok(elements::CODEC_ID_VP8.to_string()),
+            "VP9" => Ok(elements::CODEC_ID_VP9.to_string()),
             other => Err(MuxError::IncompatibleCodec {
                 codec: other.to_string(),
                 container: "WebM".to_string(),
             }),
         },
-        Codec::Audio(AudioCodec::Opus) => Ok("A_OPUS".to_string()),
-        Codec::Audio(AudioCodec::Aac) => Ok("A_AAC".to_string()),
+        Codec::Audio(AudioCodec::Opus) => Ok(elements::CODEC_ID_OPUS.to_string()),
+        Codec::Audio(AudioCodec::Aac) => Ok(elements::CODEC_ID_AAC.to_string()),
         Codec::Audio(AudioCodec::Other(s)) => match s.as_str() {
-            "Vorbis" => Ok("A_VORBIS".to_string()),
+            "Vorbis" => Ok(elements::CODEC_ID_VORBIS.to_string()),
             other => Err(MuxError::IncompatibleCodec {
                 codec: other.to_string(),
                 container: "WebM".to_string(),

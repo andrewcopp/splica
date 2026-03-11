@@ -54,3 +54,13 @@ pub const FLAG_LACING: u32 = 0x9C;
 // Track type values
 pub const TRACK_TYPE_VIDEO: u64 = 1;
 pub const TRACK_TYPE_AUDIO: u64 = 2;
+
+// Codec ID strings
+pub const CODEC_ID_VP8: &str = "V_VP8";
+pub const CODEC_ID_VP9: &str = "V_VP9";
+pub const CODEC_ID_AV1: &str = "V_AV1";
+pub const CODEC_ID_H264: &str = "V_MPEG4/ISO/AVC";
+pub const CODEC_ID_H265: &str = "V_MPEGH/ISO/HEVC";
+pub const CODEC_ID_OPUS: &str = "A_OPUS";
+pub const CODEC_ID_AAC: &str = "A_AAC";
+pub const CODEC_ID_VORBIS: &str = "A_VORBIS";
