@@ -384,6 +384,41 @@ fn test_that_process_of_h265_with_resize_succeeds() {
 }
 
 // ---------------------------------------------------------------------------
+// Crop filter (SPL-95)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_that_process_with_crop_succeeds() {
+    // Crop a 320x180 region from the 640x360 H.265 fixture.
+    // Uses H.265 input because it decodes reliably in this test harness.
+    let output_path = "/tmp/splica_test_crop.mp4";
+    let output = splica_binary()
+        .args([
+            "process",
+            "-i",
+            &fixture_path("bigbuckbunny_h265.mp4"),
+            "-o",
+            output_path,
+            "--crop",
+            "320x180+160+90",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "process with crop should succeed. stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Verify output exists and is non-empty
+    let meta = std::fs::metadata(output_path).unwrap();
+    assert!(meta.len() > 0, "output file should be non-empty");
+
+    let _ = std::fs::remove_file(output_path);
+}
+
+// ---------------------------------------------------------------------------
 // AV1 decode (SPL-88)
 // ---------------------------------------------------------------------------
 

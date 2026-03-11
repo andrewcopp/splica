@@ -14,7 +14,7 @@ use splica_core::{
     AudioCodec, Codec, ContainerFormat, DecodeError, DemuxError, Demuxer, EncodeError, ErrorKind,
     FilterError, MuxError, Muxer, PipelineError, TrackIndex, TrackKind, VideoCodec,
 };
-use splica_filter::{AspectMode, ScaleFilter, VolumeFilter};
+use splica_filter::{AspectMode, CropFilter, ScaleFilter, VolumeFilter};
 use splica_mkv::MkvMuxer;
 use splica_mp4::boxes::stsd::CodecConfig;
 use splica_mp4::{Mp4Demuxer, Mp4Muxer};
@@ -66,6 +66,11 @@ enum Commands {
         /// Aspect ratio handling when resizing (default: fit).
         #[arg(long, default_value = "fit")]
         aspect_mode: AspectModeArg,
+
+        /// Crop video to WxH+X+Y (e.g., "1080x1080+420+0").
+        /// Implies re-encoding.
+        #[arg(long)]
+        crop: Option<String>,
 
         /// Adjust audio volume. Accepts a linear multiplier (e.g., "0.5", "2.0")
         /// or a dB value (e.g., "-6dB", "+3dB"). Implies re-encoding audio.
@@ -337,6 +342,7 @@ fn main() -> Result<()> {
             max_fps,
             resize,
             aspect_mode,
+            crop,
             volume,
             format,
         } => process(
@@ -348,6 +354,7 @@ fn main() -> Result<()> {
                 max_fps,
                 resize: resize.as_deref(),
                 aspect_mode_arg: &aspect_mode,
+                crop: crop.as_deref(),
                 volume: volume.as_deref(),
             },
             &format,
@@ -372,6 +379,7 @@ fn main() -> Result<()> {
                     max_fps: None,
                     resize: None,
                     aspect_mode_arg: &AspectModeArg::Fit,
+                    crop: None,
                     volume: None,
                 },
                 &OutputFormat::Text,
@@ -397,6 +405,7 @@ fn main() -> Result<()> {
                     max_fps,
                     resize: resize.as_deref(),
                     aspect_mode_arg: &aspect_mode,
+                    crop: None,
                     volume: None,
                 },
                 &format,
@@ -1216,6 +1225,47 @@ fn parse_resize(s: &str) -> Result<(u32, u32)> {
     Ok((w, h))
 }
 
+/// Parses a "WxH+X+Y" crop geometry string into (x, y, width, height).
+fn parse_crop(s: &str) -> Result<(u32, u32, u32, u32)> {
+    // Expected format: WxH+X+Y (e.g., "1080x1080+420+0")
+    let parts: Vec<&str> = s.splitn(2, 'x').collect();
+    if parts.len() != 2 {
+        return Err(miette::miette!(
+            "invalid crop format: '{s}' — use WxH+X+Y (e.g., '1080x1080+420+0')"
+        ));
+    }
+    let w: u32 = parts[0]
+        .parse()
+        .into_diagnostic()
+        .wrap_err_with(|| format!("invalid width in crop: '{s}'"))?;
+
+    let rest = parts[1];
+    let plus_parts: Vec<&str> = rest.splitn(3, '+').collect();
+    if plus_parts.len() != 3 {
+        return Err(miette::miette!(
+            "invalid crop format: '{s}' — use WxH+X+Y (e.g., '1080x1080+420+0')"
+        ));
+    }
+    let h: u32 = plus_parts[0]
+        .parse()
+        .into_diagnostic()
+        .wrap_err_with(|| format!("invalid height in crop: '{s}'"))?;
+    let x: u32 = plus_parts[1]
+        .parse()
+        .into_diagnostic()
+        .wrap_err_with(|| format!("invalid X offset in crop: '{s}'"))?;
+    let y: u32 = plus_parts[2]
+        .parse()
+        .into_diagnostic()
+        .wrap_err_with(|| format!("invalid Y offset in crop: '{s}'"))?;
+
+    if w == 0 || h == 0 {
+        return Err(miette::miette!("crop dimensions must be non-zero: '{s}'"));
+    }
+
+    Ok((x, y, w, h))
+}
+
 fn parse_volume(s: &str) -> Result<VolumeFilter> {
     let s = s.trim();
     if let Some(db_str) = s.strip_suffix("dB").or_else(|| s.strip_suffix("db")) {
@@ -1245,6 +1295,7 @@ struct ProcessArgs<'a> {
     max_fps: Option<f32>,
     resize: Option<&'a str>,
     aspect_mode_arg: &'a AspectModeArg,
+    crop: Option<&'a str>,
     volume: Option<&'a str>,
 }
 
@@ -1343,6 +1394,7 @@ fn process_inner(args: &ProcessArgs<'_>, json_mode: bool) -> Result<TranscodeOut
         || args.preset.is_some()
         || args.max_fps.is_some()
         || args.resize.is_some()
+        || args.crop.is_some()
         || args.volume.is_some();
 
     let effective_preset = args.preset.unwrap_or(&EncodePreset::Medium);
@@ -1690,6 +1742,15 @@ fn process_inner(args: &ProcessArgs<'_>, json_mode: bool) -> Result<TranscodeOut
             };
             let scale_filter = ScaleFilter::new(w, h).with_aspect_mode(aspect_mode);
             builder = builder.with_filter(*track_idx, scale_filter);
+        }
+
+        // Add crop filter if --crop was specified (applied after scale)
+        if let Some(crop_str) = args.crop {
+            let (cx, cy, cw, ch) = parse_crop(crop_str)?;
+            let crop_filter = CropFilter::new(cx, cy, cw, ch)
+                .into_diagnostic()
+                .wrap_err("invalid crop parameters")?;
+            builder = builder.with_filter(*track_idx, crop_filter);
         }
     }
 
