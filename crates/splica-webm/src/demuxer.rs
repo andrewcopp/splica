@@ -107,7 +107,10 @@ impl<R: Read + Seek> WebmDemuxer<R> {
         };
 
         // Iterate segment children: read only Info and Tracks bodies, skip the rest
-        let mut timestamp_scale: u64 = 1_000_000;
+        let mut segment_info = SegmentInfo {
+            timestamp_scale: 1_000_000,
+            duration_ns: None,
+        };
         let mut webm_tracks: Vec<WebmTrack> = Vec::new();
         let mut cluster_start: u64 = 0;
 
@@ -131,7 +134,7 @@ impl<R: Read + Seek> WebmDemuxer<R> {
                 elements::INFO => {
                     let mut body = vec![0u8; child_size as usize];
                     reader.read_exact(&mut body)?;
-                    timestamp_scale = parse_info(&body, child_body_offset)?;
+                    segment_info = parse_info(&body, child_body_offset)?;
                 }
                 elements::TRACKS => {
                     let mut body = vec![0u8; child_size as usize];
@@ -155,11 +158,13 @@ impl<R: Read + Seek> WebmDemuxer<R> {
             return Err(WebmError::MissingElement { name: "Tracks" });
         }
 
+        let timestamp_scale = segment_info.timestamp_scale;
+
         // Build TrackInfo for each track
         let tracks: Vec<TrackInfo> = webm_tracks
             .iter()
             .enumerate()
-            .map(|(i, t)| build_track_info(i, t))
+            .map(|(i, t)| build_track_info(i, t, segment_info.duration_ns))
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(Self {
@@ -491,8 +496,16 @@ fn parse_ebml_doc_type(data: &[u8], base_offset: u64) -> Result<String, WebmErro
     })
 }
 
-fn parse_info(data: &[u8], base_offset: u64) -> Result<u64, WebmError> {
+/// Segment-level info: timestamp scale and optional duration.
+struct SegmentInfo {
+    timestamp_scale: u64,
+    /// Segment duration in nanoseconds, if present.
+    duration_ns: Option<f64>,
+}
+
+fn parse_info(data: &[u8], base_offset: u64) -> Result<SegmentInfo, WebmError> {
     let mut timestamp_scale: u64 = 1_000_000;
+    let mut duration_ticks: Option<f64> = None;
     let mut pos: usize = 0;
 
     while pos < data.len() {
@@ -507,14 +520,27 @@ fn parse_info(data: &[u8], base_offset: u64) -> Result<u64, WebmError> {
             break;
         }
 
-        if header.id == elements::TIMESTAMP_SCALE {
-            timestamp_scale = ebml::read_uint(&data[body_start..body_start + size], base_offset)?;
+        match header.id {
+            elements::TIMESTAMP_SCALE => {
+                timestamp_scale =
+                    ebml::read_uint(&data[body_start..body_start + size], base_offset)?;
+            }
+            elements::DURATION => {
+                duration_ticks =
+                    Some(ebml::read_float(&data[body_start..body_start + size], base_offset)?);
+            }
+            _ => {}
         }
 
         pos = body_start + size;
     }
 
-    Ok(timestamp_scale)
+    let duration_ns = duration_ticks.map(|ticks| ticks * timestamp_scale as f64);
+
+    Ok(SegmentInfo {
+        timestamp_scale,
+        duration_ns,
+    })
 }
 
 fn parse_tracks(data: &[u8], base_offset: u64) -> Result<Vec<WebmTrack>, WebmError> {
@@ -728,7 +754,11 @@ fn parse_simple_block(
     }))
 }
 
-fn build_track_info(index: usize, track: &WebmTrack) -> Result<TrackInfo, WebmError> {
+fn build_track_info(
+    index: usize,
+    track: &WebmTrack,
+    segment_duration_ns: Option<f64>,
+) -> Result<TrackInfo, WebmError> {
     let (kind, codec) = match track.track_type {
         elements::TRACK_TYPE_VIDEO => {
             let video_codec = match track.codec_id.as_str() {
@@ -796,11 +826,22 @@ fn build_track_info(index: usize, track: &WebmTrack) -> Result<TrackInfo, WebmEr
         None
     };
 
+    // WebM/MKV stores duration at the segment level, not per-track.
+    // Convert nanoseconds to a Timestamp with nanosecond timebase.
+    let duration = segment_duration_ns.and_then(|ns| {
+        let ticks = ns.round() as i64;
+        if ticks > 0 {
+            Timestamp::new(ticks, 1_000_000_000)
+        } else {
+            None
+        }
+    });
+
     Ok(TrackInfo {
         index: TrackIndex(index as u32),
         kind,
         codec,
-        duration: None, // WebM duration is in the Info element, not per-track
+        duration,
         video,
         audio,
     })
