@@ -53,6 +53,7 @@ use crate::Mp4Demuxer;
 #[wasm_bindgen]
 pub struct WasmMp4Demuxer {
     inner: Mp4Demuxer<Cursor<Vec<u8>>>,
+    audio_frame_duration_us: f64,
 }
 
 #[wasm_bindgen]
@@ -62,7 +63,13 @@ impl WasmMp4Demuxer {
     pub fn from_bytes(data: &[u8]) -> Result<WasmMp4Demuxer, JsValue> {
         let cursor = Cursor::new(data.to_vec());
         let inner = Mp4Demuxer::open(cursor).map_err(|e| JsValue::from_str(&e.to_string()))?;
-        Ok(WasmMp4Demuxer { inner })
+
+        let audio_frame_duration_us = compute_audio_frame_duration(&inner);
+
+        Ok(WasmMp4Demuxer {
+            inner,
+            audio_frame_duration_us,
+        })
     }
 
     /// Returns the number of tracks in the container.
@@ -269,7 +276,7 @@ impl WasmMp4Demuxer {
                         return Ok(Some(WasmAudioPacket::new(
                             packet.data.to_vec(),
                             timestamp_us,
-                            -1.0,
+                            self.audio_frame_duration_us,
                             packet.is_keyframe,
                         )));
                     }
@@ -345,6 +352,29 @@ impl WasmMp4Demuxer {
     }
 }
 
+/// Computes the audio frame duration in microseconds from the first audio track.
+///
+/// Returns the per-frame duration based on codec type:
+/// - AAC: `1024.0 / sample_rate * 1_000_000.0`
+/// - Opus: `20_000.0` (standard 20ms frame)
+/// - Unknown/absent: `-1.0`
+fn compute_audio_frame_duration<R: std::io::Read + std::io::Seek>(demuxer: &Mp4Demuxer<R>) -> f64 {
+    let track = demuxer.tracks().iter().find(|t| t.kind == TrackKind::Audio);
+
+    let track = match track {
+        Some(t) => t,
+        None => return -1.0,
+    };
+
+    let sample_rate = track.audio.as_ref().map(|a| a.sample_rate).unwrap_or(0);
+
+    match &track.codec {
+        Codec::Audio(AudioCodec::Aac) => 1024.0 / f64::from(sample_rate) * 1_000_000.0,
+        Codec::Audio(AudioCodec::Opus) => 20_000.0,
+        _ => -1.0,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -354,8 +384,11 @@ mod tests {
         // GIVEN — an MP4 with only a video track
         let mp4_data =
             std::fs::read("../../tests/fixtures/bigbuckbunny_h264.mp4").expect("fixture missing");
+        let inner = Mp4Demuxer::open(Cursor::new(mp4_data)).expect("failed to open mp4");
+        let audio_frame_duration_us = compute_audio_frame_duration(&inner);
         let mut demuxer = WasmMp4Demuxer {
-            inner: Mp4Demuxer::open(Cursor::new(mp4_data)).expect("failed to open mp4"),
+            inner,
+            audio_frame_duration_us,
         };
 
         // WHEN
@@ -371,8 +404,11 @@ mod tests {
         // GIVEN — an MP4 with only a video track
         let mp4_data =
             std::fs::read("../../tests/fixtures/bigbuckbunny_h264.mp4").expect("fixture missing");
+        let inner = Mp4Demuxer::open(Cursor::new(mp4_data)).expect("failed to open mp4");
+        let audio_frame_duration_us = compute_audio_frame_duration(&inner);
         let demuxer = WasmMp4Demuxer {
-            inner: Mp4Demuxer::open(Cursor::new(mp4_data)).expect("failed to open mp4"),
+            inner,
+            audio_frame_duration_us,
         };
 
         // WHEN

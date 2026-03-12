@@ -36,6 +36,7 @@ use crate::MkvDemuxer;
 #[wasm_bindgen]
 pub struct WasmMkvDemuxer {
     inner: MkvDemuxer<Cursor<Vec<u8>>>,
+    audio_frame_duration_us: f64,
 }
 
 #[wasm_bindgen]
@@ -45,7 +46,13 @@ impl WasmMkvDemuxer {
     pub fn from_bytes(data: &[u8]) -> Result<WasmMkvDemuxer, JsValue> {
         let cursor = Cursor::new(data.to_vec());
         let inner = MkvDemuxer::open(cursor).map_err(|e| JsValue::from_str(&e.to_string()))?;
-        Ok(WasmMkvDemuxer { inner })
+
+        let audio_frame_duration_us = compute_audio_frame_duration(&inner);
+
+        Ok(WasmMkvDemuxer {
+            inner,
+            audio_frame_duration_us,
+        })
     }
 
     /// Returns the number of tracks in the container.
@@ -253,7 +260,7 @@ impl WasmMkvDemuxer {
                         return Ok(Some(WasmAudioPacket::new(
                             packet.data.to_vec(),
                             timestamp_us,
-                            -1.0,
+                            self.audio_frame_duration_us,
                             packet.is_keyframe,
                         )));
                     }
@@ -326,6 +333,29 @@ impl WasmMkvDemuxer {
                 "audio track has video codec (unexpected)",
             )),
         }
+    }
+}
+
+/// Computes the audio frame duration in microseconds from the first audio track.
+///
+/// Returns the per-frame duration based on codec type:
+/// - AAC: `1024.0 / sample_rate * 1_000_000.0`
+/// - Opus: `20_000.0` (standard 20ms frame)
+/// - Unknown/absent: `-1.0`
+fn compute_audio_frame_duration<R: std::io::Read + std::io::Seek>(demuxer: &MkvDemuxer<R>) -> f64 {
+    let track = demuxer.tracks().iter().find(|t| t.kind == TrackKind::Audio);
+
+    let track = match track {
+        Some(t) => t,
+        None => return -1.0,
+    };
+
+    let sample_rate = track.audio.as_ref().map(|a| a.sample_rate).unwrap_or(0);
+
+    match &track.codec {
+        Codec::Audio(AudioCodec::Aac) => 1024.0 / f64::from(sample_rate) * 1_000_000.0,
+        Codec::Audio(AudioCodec::Opus) => 20_000.0,
+        _ => -1.0,
     }
 }
 

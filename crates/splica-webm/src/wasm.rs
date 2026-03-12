@@ -36,6 +36,7 @@ use crate::WebmDemuxer;
 #[wasm_bindgen]
 pub struct WasmWebmDemuxer {
     inner: WebmDemuxer<Cursor<Vec<u8>>>,
+    audio_frame_duration_us: f64,
 }
 
 #[wasm_bindgen]
@@ -45,7 +46,13 @@ impl WasmWebmDemuxer {
     pub fn from_bytes(data: &[u8]) -> Result<WasmWebmDemuxer, JsValue> {
         let cursor = Cursor::new(data.to_vec());
         let inner = WebmDemuxer::open(cursor).map_err(|e| JsValue::from_str(&e.to_string()))?;
-        Ok(WasmWebmDemuxer { inner })
+
+        let audio_frame_duration_us = compute_audio_frame_duration(&inner);
+
+        Ok(WasmWebmDemuxer {
+            inner,
+            audio_frame_duration_us,
+        })
     }
 
     /// Returns the number of tracks in the container.
@@ -234,7 +241,7 @@ impl WasmWebmDemuxer {
                         return Ok(Some(WasmAudioPacket::new(
                             packet.data.to_vec(),
                             timestamp_us,
-                            -1.0,
+                            self.audio_frame_duration_us,
                             packet.is_keyframe,
                         )));
                     }
@@ -337,6 +344,29 @@ fn build_vp9_codec_string(codec_private: Option<&[u8]>) -> String {
     format!("vp09.{profile:02}.{level:02}.{bit_depth:02}")
 }
 
+/// Computes the audio frame duration in microseconds from the first audio track.
+///
+/// Returns the per-frame duration based on codec type:
+/// - AAC: `1024.0 / sample_rate * 1_000_000.0`
+/// - Opus: `20_000.0` (standard 20ms frame)
+/// - Unknown/absent: `-1.0`
+fn compute_audio_frame_duration<R: std::io::Read + std::io::Seek>(demuxer: &WebmDemuxer<R>) -> f64 {
+    let track = demuxer.tracks().iter().find(|t| t.kind == TrackKind::Audio);
+
+    let track = match track {
+        Some(t) => t,
+        None => return -1.0,
+    };
+
+    let sample_rate = track.audio.as_ref().map(|a| a.sample_rate).unwrap_or(0);
+
+    match &track.codec {
+        Codec::Audio(AudioCodec::Aac) => 1024.0 / f64::from(sample_rate) * 1_000_000.0,
+        Codec::Audio(AudioCodec::Opus) => 20_000.0,
+        _ => -1.0,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -346,8 +376,11 @@ mod tests {
         // GIVEN — a WebM with only a video track
         let webm_data =
             std::fs::read("../../tests/fixtures/bigbuckbunny_vp9.webm").expect("fixture missing");
+        let inner = WebmDemuxer::open(Cursor::new(webm_data)).expect("failed to open webm");
+        let audio_frame_duration_us = compute_audio_frame_duration(&inner);
         let mut demuxer = WasmWebmDemuxer {
-            inner: WebmDemuxer::open(Cursor::new(webm_data)).expect("failed to open webm"),
+            inner,
+            audio_frame_duration_us,
         };
 
         // WHEN
@@ -363,8 +396,11 @@ mod tests {
         // GIVEN — a WebM with only a video track
         let webm_data =
             std::fs::read("../../tests/fixtures/bigbuckbunny_vp9.webm").expect("fixture missing");
+        let inner = WebmDemuxer::open(Cursor::new(webm_data)).expect("failed to open webm");
+        let audio_frame_duration_us = compute_audio_frame_duration(&inner);
         let demuxer = WasmWebmDemuxer {
-            inner: WebmDemuxer::open(Cursor::new(webm_data)).expect("failed to open webm"),
+            inner,
+            audio_frame_duration_us,
         };
 
         // WHEN
