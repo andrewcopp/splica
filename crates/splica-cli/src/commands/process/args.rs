@@ -63,11 +63,11 @@ pub(super) struct AudioCodecConfig {
     pub channel_layout: Option<splica_core::media::ChannelLayout>,
 }
 
-pub(super) type DemuxerWithConfigs = (
-    Box<dyn splica_core::Demuxer>,
-    Vec<VideoTrackConfig>,
-    Vec<AudioCodecConfig>,
-);
+pub(super) struct DemuxerWithConfigs {
+    pub demuxer: Box<dyn splica_core::Demuxer>,
+    pub video_tracks: Vec<VideoTrackConfig>,
+    pub audio_tracks: Vec<AudioCodecConfig>,
+}
 
 // ---------------------------------------------------------------------------
 // Parsing helpers
@@ -293,7 +293,11 @@ fn open_mp4_configs(file: File) -> Result<DemuxerWithConfigs> {
             }
         }
     }
-    Ok((Box::new(mp4), video_configs, audio_configs))
+    Ok(DemuxerWithConfigs {
+        demuxer: Box::new(mp4),
+        video_tracks: video_configs,
+        audio_tracks: audio_configs,
+    })
 }
 
 fn open_webm_configs(file: File) -> Result<DemuxerWithConfigs> {
@@ -316,7 +320,11 @@ fn open_webm_configs(file: File) -> Result<DemuxerWithConfigs> {
         }
     }
     // WebM doesn't expose MP4-style codec config; H.264 in WebM is unsupported
-    Ok((Box::new(webm), Vec::new(), audio_configs))
+    Ok(DemuxerWithConfigs {
+        demuxer: Box::new(webm),
+        video_tracks: Vec::new(),
+        audio_tracks: audio_configs,
+    })
 }
 
 fn open_mkv_configs(file: File) -> Result<DemuxerWithConfigs> {
@@ -362,5 +370,9 @@ fn open_mkv_configs(file: File) -> Result<DemuxerWithConfigs> {
             }
         }
     }
-    Ok((Box::new(mkv), video_configs, audio_configs))
+    Ok(DemuxerWithConfigs {
+        demuxer: Box::new(mkv),
+        video_tracks: video_configs,
+        audio_tracks: audio_configs,
+    })
 }

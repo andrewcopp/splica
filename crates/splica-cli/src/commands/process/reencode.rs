@@ -13,8 +13,8 @@ use splica_filter::{AspectMode, CropFilter, ScaleFilter};
 use splica_pipeline::{PipelineBuilder, PipelineEventKind};
 
 use super::args::{
-    open_demuxer_with_configs, parse_bitrate, parse_crop, parse_resize, parse_volume, ProcessArgs,
-    VideoTrackCodec,
+    open_demuxer_with_configs, parse_bitrate, parse_crop, parse_resize, parse_volume,
+    DemuxerWithConfigs, ProcessArgs, VideoTrackCodec,
 };
 use super::TranscodeOutput;
 use crate::commands::{
@@ -144,8 +144,11 @@ pub(super) fn reencode(args: &ProcessArgs<'_>, json_mode: bool) -> Result<Transc
         EncodePreset::Slow => 60.0,
     });
 
-    let (demuxer, video_track_configs, audio_track_configs) =
-        open_demuxer_with_configs(args.input)?;
+    let DemuxerWithConfigs {
+        demuxer,
+        video_tracks: video_track_configs,
+        audio_tracks: audio_track_configs,
+    } = open_demuxer_with_configs(args.input)?;
 
     // Determine target audio codec based on output container
     let out_container = output_container(args.output).unwrap_or(ContainerFormat::Mp4);
@@ -341,14 +344,13 @@ pub(super) fn reencode(args: &ProcessArgs<'_>, json_mode: bool) -> Result<Transc
         }
 
         // Add scale filter if --resize was specified
-        if let Some(resize_str) = args.resize {
-            let (w, h) = parse_resize(resize_str)?;
+        if args.resize.is_some() {
             let aspect_mode = match args.aspect_mode_arg {
                 AspectModeArg::Stretch => AspectMode::Stretch,
                 AspectModeArg::Fit => AspectMode::Fit,
                 AspectModeArg::Fill => AspectMode::Fill,
             };
-            let scale_filter = ScaleFilter::new(w, h).with_aspect_mode(aspect_mode);
+            let scale_filter = ScaleFilter::new(enc_w, enc_h).with_aspect_mode(aspect_mode);
             builder = builder.with_filter(vtc.track_index, scale_filter);
         }
 
