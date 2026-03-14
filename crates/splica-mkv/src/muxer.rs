@@ -356,7 +356,13 @@ impl<W: Write + Seek> Muxer for MkvMuxer<W> {
             self.start_cluster(pts_ms)?;
         }
 
-        let cluster_timestamp_ms = self.cluster.as_ref().unwrap().timestamp_ms;
+        let cluster_timestamp_ms = self
+            .cluster
+            .as_ref()
+            .ok_or_else(|| MuxError::InvalidTrackConfig {
+                message: "write_packet called before cluster was initialized".to_string(),
+            })?
+            .timestamp_ms;
         let track_number = (track_index + 1) as u64; // 1-based
         self.write_simple_block(packet, track_number, cluster_timestamp_ms)?;
 
