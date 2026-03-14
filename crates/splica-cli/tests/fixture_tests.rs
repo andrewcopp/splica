@@ -657,6 +657,91 @@ fn test_that_probe_mkv_reports_track_durations() {
 }
 
 // ---------------------------------------------------------------------------
+// Migrate binary invocation (SPL-133)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_that_migrate_translates_ffmpeg_command_to_splica() {
+    // GIVEN — a valid ffmpeg-style command
+
+    // WHEN — invoking the migrate subcommand via the binary
+    let output = splica_binary()
+        .args([
+            "migrate",
+            "ffmpeg",
+            "-i",
+            "input.mp4",
+            "-vf",
+            "scale=1280:720",
+            "output.webm",
+        ])
+        .output()
+        .unwrap();
+
+    // THEN — exits successfully and stdout contains the translated splica command
+    assert!(
+        output.status.success(),
+        "migrate should exit successfully. stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("splica process"),
+        "expected 'splica process' in migrate output, got: {stdout}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// AV1 encode to MP4 (SPL-133)
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore] // rav1e is very slow in debug mode; run with `cargo test -- --ignored`
+fn test_that_process_with_codec_av1_to_mp4_produces_av1_output() {
+    // GIVEN — an H.265 MP4 fixture (decodable via libde265)
+    let output_path = "/tmp/splica_test_av1_in_mp4.mp4";
+
+    // WHEN — process with --codec av1 targeting an MP4 output
+    let output = splica_binary()
+        .args([
+            "process",
+            "-i",
+            &fixture_path("bigbuckbunny_h265.mp4"),
+            "-o",
+            output_path,
+            "--codec",
+            "av1",
+            "--resize",
+            "320x180",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "AV1 encode to MP4 should succeed. stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // THEN — probe the output to verify AV1 codec
+    let probe = splica_binary()
+        .args(["probe", "--format", "json", output_path])
+        .output()
+        .unwrap();
+
+    assert!(probe.status.success());
+    let stdout = String::from_utf8_lossy(&probe.stdout);
+    let json: serde_json::Value = serde_json::from_str(&stdout).unwrap();
+    let codec = json["tracks"][0]["codec"].as_str().unwrap();
+    assert!(
+        codec.contains("AV1"),
+        "expected AV1 codec in MP4 output, got: {codec}"
+    );
+
+    let _ = std::fs::remove_file(output_path);
+}
+
+// ---------------------------------------------------------------------------
 // Probe JSON contract (SPL-116)
 // ---------------------------------------------------------------------------
 
