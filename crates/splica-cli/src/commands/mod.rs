@@ -68,9 +68,6 @@ pub(crate) enum AspectModeArg {
 
 /// Structured exit codes for automation.
 pub(crate) mod exit_code {
-    /// Success.
-    #[allow(dead_code)]
-    pub const SUCCESS: i32 = 0;
     /// Bad input: malformed file, unsupported format, invalid arguments. Do not retry.
     pub const BAD_INPUT: i32 = 1;
     /// Internal error: encoder/muxer failure. May retry.
