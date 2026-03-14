@@ -6,8 +6,9 @@
 
 mod demuxer;
 mod ebml;
-mod elements;
 pub mod error;
+
+pub use splica_webm::elements;
 mod muxer;
 #[cfg(feature = "wasm")]
 pub mod wasm;
