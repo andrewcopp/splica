@@ -22,8 +22,17 @@ jobs:
             clang libclang-dev \
             libde265-dev \
             libdav1d-dev \
-            libkvazaar-dev \
-            pkg-config cmake
+            pkg-config cmake \
+            autotools-dev automake libtool
+      - name: Build and install kvazaar from source
+        run: |
+          git clone --depth 1 --branch v2.3.1 https://github.com/ultravideo/kvazaar.git /tmp/kvazaar
+          cd /tmp/kvazaar
+          ./autogen.sh
+          ./configure --prefix=/usr
+          make -j$(nproc)
+          sudo make install
+          sudo ldconfig
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --all-targets
@@ -42,8 +51,17 @@ jobs:
             clang libclang-dev \
             libde265-dev \
             libdav1d-dev \
-            libkvazaar-dev \
-            pkg-config cmake
+            pkg-config cmake \
+            autotools-dev automake libtool
+      - name: Build and install kvazaar from source
+        run: |
+          git clone --depth 1 --branch v2.3.1 https://github.com/ultravideo/kvazaar.git /tmp/kvazaar
+          cd /tmp/kvazaar
+          ./autogen.sh
+          ./configure --prefix=/usr
+          make -j$(nproc)
+          sudo make install
+          sudo ldconfig
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
