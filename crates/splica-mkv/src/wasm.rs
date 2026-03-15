@@ -7,6 +7,9 @@ use std::io::Cursor;
 
 use wasm_bindgen::prelude::*;
 
+use splica_core::codec_strings::{
+    build_avc_codec_string_from_optional, build_vp9_codec_string, compute_audio_frame_duration,
+};
 use splica_core::wasm_types::{
     audio_track_info_json, video_track_info_json, WasmAudioDecoderConfig, WasmAudioPacket,
     WasmVideoDecoderConfig, WasmVideoPacket,
@@ -47,7 +50,7 @@ impl WasmMkvDemuxer {
         let cursor = Cursor::new(data.to_vec());
         let inner = MkvDemuxer::open(cursor).map_err(|e| JsValue::from_str(&e.to_string()))?;
 
-        let audio_frame_duration_us = compute_audio_frame_duration(&inner);
+        let audio_frame_duration_us = compute_audio_frame_duration(inner.tracks());
 
         Ok(WasmMkvDemuxer {
             inner,
@@ -121,7 +124,7 @@ impl WasmMkvDemuxer {
                 // H.264 in MKV: CodecPrivate contains avcC config
                 let description = codec_private.map(|d| d.to_vec()).unwrap_or_default();
                 Ok(Some(WasmVideoDecoderConfig::new(
-                    build_h264_codec_string(codec_private),
+                    build_avc_codec_string_from_optional(codec_private),
                     video.width,
                     video.height,
                     description,
@@ -334,80 +337,4 @@ impl WasmMkvDemuxer {
             )),
         }
     }
-}
-
-/// Computes the audio frame duration in microseconds from the first audio track.
-///
-/// Returns the per-frame duration based on codec type:
-/// - AAC: `1024.0 / sample_rate * 1_000_000.0`
-/// - Opus: `20_000.0` (standard 20ms frame)
-/// - Unknown/absent: `-1.0`
-fn compute_audio_frame_duration<R: std::io::Read + std::io::Seek>(demuxer: &MkvDemuxer<R>) -> f64 {
-    let track = demuxer.tracks().iter().find(|t| t.kind == TrackKind::Audio);
-
-    let track = match track {
-        Some(t) => t,
-        None => return -1.0,
-    };
-
-    let sample_rate = track.audio.as_ref().map(|a| a.sample_rate).unwrap_or(0);
-
-    match &track.codec {
-        Codec::Audio(AudioCodec::Aac) => 1024.0 / f64::from(sample_rate) * 1_000_000.0,
-        Codec::Audio(AudioCodec::Opus) => 20_000.0,
-        _ => -1.0,
-    }
-}
-
-/// Builds a WebCodecs H.264 codec string from CodecPrivate (avcC) data.
-///
-/// Extracts profile, constraint flags, and level from the avcC box to produce
-/// a string like `"avc1.42c01e"`. Falls back to `"avc1"` when CodecPrivate
-/// is absent or too short.
-fn build_h264_codec_string(codec_private: Option<&[u8]>) -> String {
-    if let Some(data) = codec_private {
-        // avcC structure: version(1) + profile(1) + compat(1) + level(1) ...
-        if data.len() >= 4 {
-            let profile = data[1];
-            let compat = data[2];
-            let level = data[3];
-            return format!("avc1.{profile:02x}{compat:02x}{level:02x}");
-        }
-    }
-    "avc1".to_string()
-}
-
-/// Builds a WebCodecs VP9 codec string from CodecPrivate data.
-///
-/// Parses VP Codec ISO Media File Format features (profile, level, bit depth)
-/// from the CodecPrivate bytes. Falls back to `"vp09.00.10.08"` (profile 0,
-/// level 1.0, 8-bit) when CodecPrivate is absent or too short to parse.
-fn build_vp9_codec_string(codec_private: Option<&[u8]>) -> String {
-    let mut profile: u8 = 0;
-    let mut level: u8 = 10;
-    let mut bit_depth: u8 = 8;
-
-    if let Some(data) = codec_private {
-        // VP Codec ISO Media File Format: sequence of (id: u8, length: u8, value: [u8])
-        let mut pos = 0;
-        while pos + 2 <= data.len() {
-            let id = data[pos];
-            let len = data[pos + 1] as usize;
-            pos += 2;
-            if pos + len > data.len() {
-                break;
-            }
-            if len == 1 {
-                match id {
-                    1 => profile = data[pos],
-                    2 => level = data[pos],
-                    3 => bit_depth = data[pos],
-                    _ => {}
-                }
-            }
-            pos += len;
-        }
-    }
-
-    format!("vp09.{profile:02}.{level:02}.{bit_depth:02}")
 }

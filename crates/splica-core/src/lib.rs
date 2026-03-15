@@ -1,5 +1,6 @@
 //! Shared types, traits, and error types for the splica media processing library.
 
+pub mod codec_strings;
 pub mod error;
 pub mod media;
 pub mod smpte;

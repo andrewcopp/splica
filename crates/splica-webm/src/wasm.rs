@@ -7,6 +7,7 @@ use std::io::Cursor;
 
 use wasm_bindgen::prelude::*;
 
+use splica_core::codec_strings::{build_vp9_codec_string, compute_audio_frame_duration};
 use splica_core::wasm_types::{
     audio_track_info_json, video_track_info_json, WasmAudioDecoderConfig, WasmAudioPacket,
     WasmVideoDecoderConfig, WasmVideoPacket,
@@ -47,7 +48,7 @@ impl WasmWebmDemuxer {
         let cursor = Cursor::new(data.to_vec());
         let inner = WebmDemuxer::open(cursor).map_err(|e| JsValue::from_str(&e.to_string()))?;
 
-        let audio_frame_duration_us = compute_audio_frame_duration(&inner);
+        let audio_frame_duration_us = compute_audio_frame_duration(inner.tracks());
 
         Ok(WasmWebmDemuxer {
             inner,
@@ -309,64 +310,6 @@ impl WasmWebmDemuxer {
     }
 }
 
-/// Builds a WebCodecs VP9 codec string from CodecPrivate data.
-///
-/// Parses VP Codec ISO Media File Format features (profile, level, bit depth)
-/// from the CodecPrivate bytes. Falls back to `"vp09.00.10.08"` (profile 0,
-/// level 1.0, 8-bit) when CodecPrivate is absent or too short to parse.
-fn build_vp9_codec_string(codec_private: Option<&[u8]>) -> String {
-    let mut profile: u8 = 0;
-    let mut level: u8 = 10;
-    let mut bit_depth: u8 = 8;
-
-    if let Some(data) = codec_private {
-        // VP Codec ISO Media File Format: sequence of (id: u8, length: u8, value: [u8])
-        let mut pos = 0;
-        while pos + 2 <= data.len() {
-            let id = data[pos];
-            let len = data[pos + 1] as usize;
-            pos += 2;
-            if pos + len > data.len() {
-                break;
-            }
-            if len == 1 {
-                match id {
-                    1 => profile = data[pos],
-                    2 => level = data[pos],
-                    3 => bit_depth = data[pos],
-                    _ => {}
-                }
-            }
-            pos += len;
-        }
-    }
-
-    format!("vp09.{profile:02}.{level:02}.{bit_depth:02}")
-}
-
-/// Computes the audio frame duration in microseconds from the first audio track.
-///
-/// Returns the per-frame duration based on codec type:
-/// - AAC: `1024.0 / sample_rate * 1_000_000.0`
-/// - Opus: `20_000.0` (standard 20ms frame)
-/// - Unknown/absent: `-1.0`
-fn compute_audio_frame_duration<R: std::io::Read + std::io::Seek>(demuxer: &WebmDemuxer<R>) -> f64 {
-    let track = demuxer.tracks().iter().find(|t| t.kind == TrackKind::Audio);
-
-    let track = match track {
-        Some(t) => t,
-        None => return -1.0,
-    };
-
-    let sample_rate = track.audio.as_ref().map(|a| a.sample_rate).unwrap_or(0);
-
-    match &track.codec {
-        Codec::Audio(AudioCodec::Aac) => 1024.0 / f64::from(sample_rate) * 1_000_000.0,
-        Codec::Audio(AudioCodec::Opus) => 20_000.0,
-        _ => -1.0,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -377,7 +320,7 @@ mod tests {
         let webm_data =
             std::fs::read("../../tests/fixtures/bigbuckbunny_vp9.webm").expect("fixture missing");
         let inner = WebmDemuxer::open(Cursor::new(webm_data)).expect("failed to open webm");
-        let audio_frame_duration_us = compute_audio_frame_duration(&inner);
+        let audio_frame_duration_us = compute_audio_frame_duration(inner.tracks());
         let mut demuxer = WasmWebmDemuxer {
             inner,
             audio_frame_duration_us,
@@ -397,7 +340,7 @@ mod tests {
         let webm_data =
             std::fs::read("../../tests/fixtures/bigbuckbunny_vp9.webm").expect("fixture missing");
         let inner = WebmDemuxer::open(Cursor::new(webm_data)).expect("failed to open webm");
-        let audio_frame_duration_us = compute_audio_frame_duration(&inner);
+        let audio_frame_duration_us = compute_audio_frame_duration(inner.tracks());
         let demuxer = WasmWebmDemuxer {
             inner,
             audio_frame_duration_us,

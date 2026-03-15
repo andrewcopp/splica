@@ -7,6 +7,7 @@ use std::io::Cursor;
 
 use wasm_bindgen::prelude::*;
 
+use splica_core::codec_strings::compute_audio_frame_duration;
 use splica_core::wasm_types::{
     audio_track_info_json, video_track_info_json, WasmAudioDecoderConfig, WasmAudioPacket,
     WasmVideoDecoderConfig, WasmVideoPacket,
@@ -64,7 +65,7 @@ impl WasmMp4Demuxer {
         let cursor = Cursor::new(data.to_vec());
         let inner = Mp4Demuxer::open(cursor).map_err(|e| JsValue::from_str(&e.to_string()))?;
 
-        let audio_frame_duration_us = compute_audio_frame_duration(&inner);
+        let audio_frame_duration_us = compute_audio_frame_duration(inner.tracks());
 
         Ok(WasmMp4Demuxer {
             inner,
@@ -352,29 +353,6 @@ impl WasmMp4Demuxer {
     }
 }
 
-/// Computes the audio frame duration in microseconds from the first audio track.
-///
-/// Returns the per-frame duration based on codec type:
-/// - AAC: `1024.0 / sample_rate * 1_000_000.0`
-/// - Opus: `20_000.0` (standard 20ms frame)
-/// - Unknown/absent: `-1.0`
-fn compute_audio_frame_duration<R: std::io::Read + std::io::Seek>(demuxer: &Mp4Demuxer<R>) -> f64 {
-    let track = demuxer.tracks().iter().find(|t| t.kind == TrackKind::Audio);
-
-    let track = match track {
-        Some(t) => t,
-        None => return -1.0,
-    };
-
-    let sample_rate = track.audio.as_ref().map(|a| a.sample_rate).unwrap_or(0);
-
-    match &track.codec {
-        Codec::Audio(AudioCodec::Aac) => 1024.0 / f64::from(sample_rate) * 1_000_000.0,
-        Codec::Audio(AudioCodec::Opus) => 20_000.0,
-        _ => -1.0,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -385,7 +363,7 @@ mod tests {
         let mp4_data =
             std::fs::read("../../tests/fixtures/bigbuckbunny_h264.mp4").expect("fixture missing");
         let inner = Mp4Demuxer::open(Cursor::new(mp4_data)).expect("failed to open mp4");
-        let audio_frame_duration_us = compute_audio_frame_duration(&inner);
+        let audio_frame_duration_us = compute_audio_frame_duration(inner.tracks());
         let mut demuxer = WasmMp4Demuxer {
             inner,
             audio_frame_duration_us,
@@ -405,7 +383,7 @@ mod tests {
         let mp4_data =
             std::fs::read("../../tests/fixtures/bigbuckbunny_h264.mp4").expect("fixture missing");
         let inner = Mp4Demuxer::open(Cursor::new(mp4_data)).expect("failed to open mp4");
-        let audio_frame_duration_us = compute_audio_frame_duration(&inner);
+        let audio_frame_duration_us = compute_audio_frame_duration(inner.tracks());
         let demuxer = WasmMp4Demuxer {
             inner,
             audio_frame_duration_us,
