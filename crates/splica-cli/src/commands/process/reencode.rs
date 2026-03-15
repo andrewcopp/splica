@@ -200,6 +200,24 @@ pub(super) fn reencode(args: &ProcessArgs<'_>, json_mode: bool) -> Result<Transc
         ));
     }
 
+    // Warn if any video track has color space metadata that will be lost
+    for vtc in &video_track_configs {
+        if let Some(ref cs) = vtc.color_space {
+            let cs_name = format_color_space_brief(cs);
+            let msg = format!(
+                "input has color space {cs_name} — color metadata will not be preserved in re-encoded output"
+            );
+            if json_mode {
+                println!(
+                    "{}",
+                    serde_json::json!({"event": "warning", "message": msg})
+                );
+            } else {
+                eprintln!("  Warning: {msg}");
+            }
+        }
+    }
+
     let muxer = create_muxer(args.output)?;
 
     // Shared counters for JSON output
@@ -510,4 +528,21 @@ pub(super) fn reencode(args: &ProcessArgs<'_>, json_mode: bool) -> Result<Transc
         output_duration_secs: qc.duration_secs,
         output_bitrate_kbps: qc.bitrate_kbps,
     })
+}
+
+fn format_color_space_brief(cs: &splica_core::ColorSpace) -> String {
+    use splica_core::media::{ColorPrimaries, ColorRange, TransferCharacteristics};
+
+    let name = match (cs.primaries, cs.transfer) {
+        (ColorPrimaries::Bt709, TransferCharacteristics::Bt709) => "bt709",
+        (ColorPrimaries::Bt2020, TransferCharacteristics::Smpte2084) => "bt2020-pq",
+        (ColorPrimaries::Bt2020, TransferCharacteristics::HybridLogGamma) => "bt2020-hlg",
+        (ColorPrimaries::Bt2020, _) => "bt2020",
+        _ => "unknown",
+    };
+    let range = match cs.range {
+        ColorRange::Full => "full",
+        ColorRange::Limited => "limited",
+    };
+    format!("{name}/{range}")
 }
