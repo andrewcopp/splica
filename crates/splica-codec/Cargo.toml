@@ -8,13 +8,37 @@ repository.workspace = true
 description = "Codec trait implementations and FFI wrappers for the splica media processing library"
 
 [features]
-codec-h264 = ["dep:openh264"]
-codec-h265 = ["dep:libde265"]
-codec-h265-enc = ["dep:kvazaar-sys"]
-codec-av1 = ["dep:dav1d", "dep:rav1e", "dep:num-traits"]
-codec-aac = ["dep:symphonia-core", "dep:symphonia-codec-aac"]
-codec-aac-enc = ["dep:fdk-aac"]
-codec-opus = ["dep:opus"]
+default = ["all-codecs"]
+
+# Individual codec flags
+decode-h264 = ["dep:openh264"]
+encode-h264 = ["dep:openh264"]
+decode-h265 = ["dep:libde265"]
+encode-h265 = ["dep:kvazaar-sys"]
+decode-av1 = ["dep:dav1d", "dep:num-traits"]
+encode-av1 = ["dep:rav1e"]
+decode-aac = ["dep:symphonia-core", "dep:symphonia-codec-aac"]
+encode-aac = ["dep:fdk-aac"]
+decode-opus = ["dep:opus"]
+encode-opus = ["dep:opus"]
+
+# Convenience aliases (preserve old names for backward compatibility)
+codec-h264 = ["decode-h264", "encode-h264"]
+codec-h265 = ["decode-h265"]
+codec-h265-enc = ["encode-h265"]
+codec-av1 = ["decode-av1", "encode-av1"]
+codec-aac = ["decode-aac"]
+codec-aac-enc = ["encode-aac"]
+codec-opus = ["decode-opus", "encode-opus"]
+
+# Meta feature
+all-codecs = [
+    "decode-h264", "encode-h264",
+    "decode-h265", "encode-h265",
+    "decode-av1", "encode-av1",
+    "decode-aac", "encode-aac",
+    "decode-opus", "encode-opus",
+]
 
 [dependencies]
 splica-core.workspace = true

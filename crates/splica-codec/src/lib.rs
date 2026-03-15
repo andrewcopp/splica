@@ -30,8 +30,9 @@
 //!
 //! ### Feature flags
 //!
-//! Each codec is behind a feature flag: `codec-av1`, `codec-h264`, `codec-aac`,
-//! `codec-opus`. WASM builds enable the same flags but link different
+//! Each codec direction is behind its own feature flag: `decode-h264`,
+//! `encode-h264`, `decode-av1`, `encode-av1`, etc. Enable `all-codecs`
+//! for everything. WASM builds enable the same flags but link different
 //! implementations via `#[cfg(target_arch = "wasm32")]`.
 //!
 //! ### Bundle size implications
@@ -49,34 +50,34 @@ pub mod h264;
 pub mod h265;
 pub mod opus;
 
-#[cfg(feature = "codec-h264")]
+#[cfg(feature = "decode-h264")]
 pub use h264::{H264Decoder, H264DecoderConfig, H264Profile};
 
-#[cfg(feature = "codec-h264")]
+#[cfg(feature = "encode-h264")]
 pub use h264::{
     H264Encoder, H264EncoderBuilder, H264EncoderConfig, H264EncoderLevel, H264EncoderProfile,
 };
 
-#[cfg(feature = "codec-h265")]
+#[cfg(feature = "decode-h265")]
 pub use h265::{H265Decoder, H265DecoderConfig};
 
-#[cfg(feature = "codec-h265-enc")]
+#[cfg(feature = "encode-h265")]
 pub use h265::{H265Encoder, H265EncoderBuilder, H265EncoderConfig};
 
-#[cfg(feature = "codec-aac")]
+#[cfg(feature = "decode-aac")]
 pub use aac::{AacDecoder, AacDecoderConfig};
 
-#[cfg(feature = "codec-aac-enc")]
+#[cfg(feature = "encode-aac")]
 pub use aac::{AacEncoder, AacEncoderBuilder, AacEncoderConfig};
 
-#[cfg(feature = "codec-opus")]
+#[cfg(feature = "decode-opus")]
 pub use opus::{OpusDecoder, OpusDecoderConfig};
 
-#[cfg(feature = "codec-opus")]
+#[cfg(feature = "encode-opus")]
 pub use opus::{OpusEncoder, OpusEncoderBuilder, OpusEncoderConfig};
 
-#[cfg(feature = "codec-av1")]
+#[cfg(feature = "decode-av1")]
 pub use av1::Av1Decoder;
 
-#[cfg(feature = "codec-av1")]
+#[cfg(feature = "encode-av1")]
 pub use av1::{Av1Encoder, Av1EncoderBuilder, Av1EncoderConfig};
