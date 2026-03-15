@@ -112,6 +112,24 @@ enum Commands {
         format: OutputFormat,
     },
 
+    /// Concatenate multiple media files via stream copy.
+    ///
+    /// All input files must share the same codecs and track layout.
+    /// Timestamps are remapped so the output plays sequentially.
+    Join {
+        /// Input file paths (at least 2 required).
+        #[arg(short, long, num_args = 2.., required = true)]
+        input: Vec<PathBuf>,
+
+        /// Output file path.
+        #[arg(short, long)]
+        output: PathBuf,
+
+        /// Output format.
+        #[arg(long, default_value = "text")]
+        format: OutputFormat,
+    },
+
     /// Extract only audio tracks from a media file.
     ExtractAudio {
         /// Input file path.
@@ -229,6 +247,14 @@ fn main() -> Result<()> {
             end,
             format,
         } => commands::trim::trim(&input, &output, start.as_deref(), end.as_deref(), &format),
+        Commands::Join {
+            input,
+            output,
+            format,
+        } => {
+            let input_refs: Vec<&std::path::Path> = input.iter().map(|p| p.as_path()).collect();
+            commands::join::join(&input_refs, &output, &format)
+        }
         Commands::ExtractAudio {
             input,
             output,
