@@ -24,3 +24,6 @@ Thumbs.db
 # Test fixtures — small CC-licensed clips (~1MB each) are tracked in git:
 # bigbuckbunny_h264.mp4, bigbuckbunny_h265.mp4, bigbuckbunny_vp9.webm,
 # bigbuckbunny_av1.mp4, bigbuckbunny_h264.mkv
+
+# Benchmark results (generated)
+/benchmarks/results/
