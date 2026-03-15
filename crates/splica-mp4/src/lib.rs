@@ -9,6 +9,7 @@ pub(crate) mod codec_strings;
 pub mod demuxer;
 pub mod error;
 pub mod fmp4_muxer;
+pub(crate) mod mux_sample_table;
 pub mod muxer;
 pub mod sample_table;
 pub(crate) mod track;
