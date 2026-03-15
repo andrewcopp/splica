@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>splica WASM Demo: Browser-Native Video Demuxing</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 800px; margin: 2em auto; line-height: 1.6; }
+    h1 { border-bottom: 2px solid #333; padding-bottom: 0.5em; }
+    pre { background: #f5f5f5; padding: 1em; overflow-x: auto; border-radius: 4px; }
+    code { font-family: 'SF Mono', Monaco, Consolas, monospace; }
+    .highlight { background: #e8f5e9; padding: 0.2em 0.5em; border-radius: 3px; }
+    #output { white-space: pre-wrap; font-family: monospace; }
+    button { padding: 0.5em 1em; font-size: 1em; cursor: pointer; margin: 0.5em 0; }
+    .comparison { display: grid; grid-template-columns: 1fr 1fr; gap: 1em; }
+    .comparison > div { background: #f5f5f5; padding: 1em; border-radius: 4px; }
+    .size-bar { height: 20px; background: #4CAF50; border-radius: 3px; margin: 0.5em 0; }
+  </style>
+</head>
+<body>
+  <h1>splica: Browser-Native Video Demuxing</h1>
+
+  <p>
+    This demo runs <strong>entirely in your browser</strong> &mdash; no server,
+    no ffmpeg, no native code. The splica WASM module demuxes video files and
+    feeds packets directly to the browser's WebCodecs API for decoding.
+  </p>
+
+  <h2>Bundle Size Comparison</h2>
+  <div>
+    <strong>splica-wasm:</strong>
+    <div class="size-bar" style="width: 10%" id="splica-bar"></div>
+    <span id="splica-size">~200 KB</span> (gzipped)
+    <br>
+    <strong>ffmpeg.wasm:</strong>
+    <div class="size-bar" style="width: 100%; background: #FF9800" id="ffmpeg-bar"></div>
+    <span>~30 MB</span> (gzipped)
+  </div>
+
+  <h2>How It Works</h2>
+
+  <div class="comparison">
+    <div>
+      <h3>ffmpeg.wasm</h3>
+<pre><code>// 30 MB download
+import { FFmpeg } from '@ffmpeg/ffmpeg';
+const ffmpeg = new FFmpeg();
+await ffmpeg.load(); // downloads 30 MB WASM
+
+// Write file to virtual filesystem
+ffmpeg.writeFile('input.mp4', data);
+
+// Shell out to ffmpeg CLI in WASM
+await ffmpeg.exec([
+  '-i', 'input.mp4',
+  '-f', 'rawvideo',
+  'output.raw'
+]);
+
+// Read result from virtual filesystem
+const result = ffmpeg.readFile('output.raw');
+</code></pre>
+    </div>
+    <div>
+      <h3>splica-wasm</h3>
+<pre><code>// ~200 KB download
+import init, { WasmMp4Demuxer }
+  from './pkg/splica_wasm.js';
+await init(); // loads ~200 KB WASM
+
+// Direct API — no virtual filesystem
+const demuxer = WasmMp4Demuxer
+  .fromBytes(mp4Data);
+
+// WebCodecs-ready config
+const config = demuxer
+  .videoDecoderConfig();
+
+// Stream packets to WebCodecs
+while (true) {
+  const pkt = demuxer.readVideoPacket();
+  if (!pkt) break;
+  // pkt.data, pkt.timestampUs
+}
+</code></pre>
+    </div>
+  </div>
+
+  <h2>Live Demo</h2>
+  <p>
+    Drop an MP4, WebM, or MKV file below to demux it in your browser.
+    <em>(Requires the splica WASM package to be built and served.)</em>
+  </p>
+
+  <input type="file" id="file-input" accept=".mp4,.webm,.mkv">
+  <button onclick="runDemo()">Demux File</button>
+
+  <pre id="output">Waiting for file...</pre>
+
+  <script type="module">
+    // This demo requires:
+    //   wasm-pack build --target web crates/splica-wasm
+    //   Then serve the pkg/ directory alongside this file
+
+    let wasmModule = null;
+
+    async function loadWasm() {
+      try {
+        const mod = await import('./pkg/splica_wasm.js');
+        await mod.default();
+        wasmModule = mod;
+        document.getElementById('output').textContent = 'WASM loaded. Select a file to demux.';
+      } catch (e) {
+        document.getElementById('output').textContent =
+          'WASM not loaded (build with: wasm-pack build --target web crates/splica-wasm)\n' +
+          'This page shows the code and comparison; the live demo requires the WASM build.';
+      }
+    }
+
+    window.runDemo = async function() {
+      const output = document.getElementById('output');
+      const fileInput = document.getElementById('file-input');
+
+      if (!fileInput.files.length) {
+        output.textContent = 'Please select a file first.';
+        return;
+      }
+
+      if (!wasmModule) {
+        output.textContent = 'WASM module not loaded. Build with:\n  wasm-pack build --target web crates/splica-wasm';
+        return;
+      }
+
+      const file = fileInput.files[0];
+      const data = new Uint8Array(await file.arrayBuffer());
+      const ext = file.name.split('.').pop().toLowerCase();
+
+      output.textContent = `Demuxing ${file.name} (${(data.length / 1024).toFixed(1)} KB)...\n\n`;
+
+      try {
+        let demuxer;
+        if (ext === 'mp4' || ext === 'm4v') {
+          demuxer = wasmModule.WasmMp4Demuxer.fromBytes(data);
+        } else if (ext === 'webm') {
+          demuxer = wasmModule.WasmWebmDemuxer.fromBytes(data);
+        } else if (ext === 'mkv') {
+          demuxer = wasmModule.WasmMkvDemuxer.fromBytes(data);
+        } else {
+          output.textContent += `Unsupported format: .${ext}`;
+          return;
+        }
+
+        // Get video decoder config (WebCodecs-compatible)
+        const config = demuxer.videoDecoderConfig();
+        if (config) {
+          output.textContent += `Video decoder config:\n`;
+          output.textContent += `  Codec: ${config.codec}\n`;
+          output.textContent += `  Width: ${config.codedWidth}\n`;
+          output.textContent += `  Height: ${config.codedHeight}\n\n`;
+        }
+
+        // Get audio decoder config
+        const audioConfig = demuxer.audioDecoderConfig();
+        if (audioConfig) {
+          output.textContent += `Audio decoder config:\n`;
+          output.textContent += `  Codec: ${audioConfig.codec}\n`;
+          output.textContent += `  Sample rate: ${audioConfig.sampleRate}\n`;
+          output.textContent += `  Channels: ${audioConfig.numberOfChannels}\n\n`;
+        }
+
+        // Read video packets
+        let videoPackets = 0;
+        let totalVideoBytes = 0;
+        let keyframes = 0;
+        const start = performance.now();
+
+        while (true) {
+          const packet = demuxer.readVideoPacket();
+          if (!packet) break;
+          videoPackets++;
+          totalVideoBytes += packet.data.length;
+          if (packet.isKeyframe) keyframes++;
+        }
+
+        const elapsed = performance.now() - start;
+
+        output.textContent += `Video packets: ${videoPackets}\n`;
+        output.textContent += `Keyframes: ${keyframes}\n`;
+        output.textContent += `Total video data: ${(totalVideoBytes / 1024).toFixed(1)} KB\n`;
+        output.textContent += `Demux time: ${elapsed.toFixed(1)} ms\n\n`;
+
+        // Read audio packets
+        let audioPackets = 0;
+        let totalAudioBytes = 0;
+
+        while (true) {
+          const packet = demuxer.readAudioPacket();
+          if (!packet) break;
+          audioPackets++;
+          totalAudioBytes += packet.data.length;
+        }
+
+        if (audioPackets > 0) {
+          output.textContent += `Audio packets: ${audioPackets}\n`;
+          output.textContent += `Total audio data: ${(totalAudioBytes / 1024).toFixed(1)} KB\n`;
+        }
+
+        output.textContent += `\nDone. No ffmpeg needed.`;
+
+      } catch (e) {
+        output.textContent += `Error: ${e.message || e}`;
+      }
+    };
+
+    loadWasm();
+  </script>
+
+  <h2>The Point</h2>
+  <p>
+    ffmpeg.wasm is a full ffmpeg compiled to WebAssembly &mdash; <strong>~30 MB</strong>
+    of download before your page can process a single frame. It exposes a CLI interface
+    through a virtual filesystem, because that's how ffmpeg was designed: as a
+    command-line tool.
+  </p>
+  <p>
+    splica-wasm is purpose-built for the browser. <span class="highlight">~200 KB</span>,
+    loads instantly, and gives you a native JavaScript API that feeds directly into
+    WebCodecs. No virtual filesystem. No CLI emulation. No 30 MB download.
+  </p>
+  <p>
+    <strong>This is not a feature ffmpeg can add.</strong> It's a consequence of
+    designing for the browser from day one instead of porting a 24-year-old
+    command-line tool.
+  </p>
+</body>
+</html>
