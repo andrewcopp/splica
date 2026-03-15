@@ -22,6 +22,9 @@ pub struct Pipeline {
     pub(crate) output_codecs: HashMap<TrackIndex, Codec>,
     pub(crate) output_dimensions: HashMap<TrackIndex, (u32, u32)>,
     pub(crate) on_event: Option<Box<dyn Fn(PipelineEvent)>>,
+    /// Maximum output frame rate per track. Frames closer together than
+    /// 1/max_fps seconds are dropped before encoding.
+    pub(crate) max_fps: HashMap<TrackIndex, f32>,
 }
 
 fn emit_event(on_event: &Option<Box<dyn Fn(PipelineEvent)>>, kind: PipelineEventKind) {
@@ -32,6 +35,9 @@ fn emit_event(on_event: &Option<Box<dyn Fn(PipelineEvent)>>, kind: PipelineEvent
 
 /// Drains all available frames from a decoder, applies filters, encodes them,
 /// and writes resulting packets to the muxer.
+///
+/// When `max_fps` is `Some`, frames whose PTS is less than `1/max_fps`
+/// seconds after the last emitted frame are dropped before filtering/encoding.
 fn drain_decoder_to_muxer(
     decoder: &mut dyn Decoder,
     encoder: &mut dyn Encoder,
@@ -40,7 +46,11 @@ fn drain_decoder_to_muxer(
     output_track: TrackIndex,
     on_event: &Option<Box<dyn Fn(PipelineEvent)>>,
     counters: &mut PipelineCounters,
+    max_fps: Option<f32>,
+    last_emitted_pts: &mut Option<f64>,
 ) -> Result<(), PipelineError> {
+    let min_interval = max_fps.map(|fps| 1.0 / fps as f64);
+
     while let Some(frame) = decoder.receive_frame()? {
         counters.frames_decoded += 1;
         emit_event(
@@ -49,6 +59,20 @@ fn drain_decoder_to_muxer(
                 count: counters.frames_decoded,
             },
         );
+
+        // Drop frames that exceed the max frame rate
+        if let Some(interval) = min_interval {
+            let pts_secs = match &frame {
+                Frame::Video(vf) => vf.pts.as_seconds_f64(),
+                Frame::Audio(af) => af.pts.as_seconds_f64(),
+            };
+            if let Some(last) = *last_emitted_pts {
+                if pts_secs - last < interval {
+                    continue;
+                }
+            }
+            *last_emitted_pts = Some(pts_secs);
+        }
 
         // Apply video filters if the frame is video
         let filtered_frame = if filters.is_empty() {
@@ -206,6 +230,9 @@ impl Pipeline {
             packets_written: 0,
         };
 
+        // Per-track state for frame rate limiting
+        let mut last_emitted_pts: HashMap<TrackIndex, Option<f64>> = HashMap::new();
+
         // Main demux loop
         while let Some(packet) = self.demuxer.read_packet()? {
             counters.packets_read += 1;
@@ -235,6 +262,8 @@ impl Pipeline {
                     filters,
                 }) => {
                     decoder.send_packet(Some(&packet))?;
+                    let track_max_fps = self.max_fps.get(&input_track).copied();
+                    let pts_state = last_emitted_pts.entry(input_track).or_insert(None);
                     drain_decoder_to_muxer(
                         decoder.as_mut(),
                         encoder.as_mut(),
@@ -243,6 +272,8 @@ impl Pipeline {
                         output_track,
                         &self.on_event,
                         &mut counters,
+                        track_max_fps,
+                        pts_state,
                     )?;
                 }
                 Some(TrackMode::AudioTranscode {
@@ -289,6 +320,8 @@ impl Pipeline {
                 }) => {
                     // Signal end-of-stream to decoder, drain remaining frames
                     decoder.send_packet(None)?;
+                    let track_max_fps = self.max_fps.get(&track_idx).copied();
+                    let pts_state = last_emitted_pts.entry(track_idx).or_insert(None);
                     drain_decoder_to_muxer(
                         decoder.as_mut(),
                         encoder.as_mut(),
@@ -297,6 +330,8 @@ impl Pipeline {
                         output_track,
                         &self.on_event,
                         &mut counters,
+                        track_max_fps,
+                        pts_state,
                     )?;
 
                     // Signal end-of-stream to encoder, drain remaining packets

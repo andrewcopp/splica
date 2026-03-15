@@ -86,6 +86,7 @@ pub struct PipelineBuilder {
     pub(crate) audio_filters: HashMap<TrackIndex, Vec<Box<dyn AudioFilter>>>,
     pub(crate) output_codecs: HashMap<TrackIndex, Codec>,
     pub(crate) output_dimensions: HashMap<TrackIndex, (u32, u32)>,
+    pub(crate) max_fps: HashMap<TrackIndex, f32>,
 }
 
 impl Default for PipelineBuilder {
@@ -109,6 +110,7 @@ impl PipelineBuilder {
             audio_filters: HashMap::new(),
             output_codecs: HashMap::new(),
             output_dimensions: HashMap::new(),
+            max_fps: HashMap::new(),
         }
     }
 
@@ -221,6 +223,15 @@ impl PipelineBuilder {
         self
     }
 
+    /// Sets a maximum output frame rate for a video track.
+    ///
+    /// Frames whose PTS is less than `1/fps` seconds after the previously
+    /// emitted frame are dropped before filtering and encoding.
+    pub fn with_max_fps(mut self, track: TrackIndex, fps: f32) -> Self {
+        self.max_fps.insert(track, fps);
+        self
+    }
+
     /// Runs all pre-flight validation checks and returns every error found.
     ///
     /// Call this to get a complete list of configuration issues before
@@ -326,6 +337,7 @@ impl PipelineBuilder {
             output_codecs: self.output_codecs,
             output_dimensions: self.output_dimensions,
             on_event: self.on_event,
+            max_fps: self.max_fps,
         })
     }
 

@@ -470,6 +470,13 @@ pub(super) fn reencode(args: &ProcessArgs<'_>, json_mode: bool) -> Result<Transc
         }
     }
 
+    // Set max frame rate for pipeline-level frame dropping
+    if let Some(max_fps) = args.max_fps {
+        for vtc in &video_track_configs {
+            builder = builder.with_max_fps(vtc.track_index, max_fps);
+        }
+    }
+
     let mut pipeline = builder
         .build()
         .into_diagnostic()
