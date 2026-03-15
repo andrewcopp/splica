@@ -11,6 +11,7 @@ pub mod error;
 pub mod fmp4_muxer;
 pub(crate) mod mux_sample_table;
 pub mod muxer;
+pub(crate) mod track_parsing;
 pub mod sample_table;
 pub(crate) mod track;
 
