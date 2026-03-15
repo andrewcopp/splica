@@ -367,7 +367,16 @@ impl<W: Write + Seek> Muxer for WebmMuxer<W> {
             self.start_cluster(pts_ms)?;
         }
 
-        let cluster_timestamp_ms = self.cluster.as_ref().unwrap().timestamp_ms;
+        // Cluster is guaranteed to exist: either it existed before or
+        // start_cluster() was just called above in the need_new_cluster branch
+        let cluster_timestamp_ms = match self.cluster.as_ref() {
+            Some(c) => c.timestamp_ms,
+            None => {
+                return Err(MuxError::InvalidTrackConfig {
+                    message: "no active cluster when writing packet".to_string(),
+                });
+            }
+        };
         let track_number = (track_index + 1) as u64; // 1-based
         self.write_simple_block(packet, track_number, cluster_timestamp_ms)?;
 

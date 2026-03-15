@@ -285,7 +285,10 @@ impl<W: Write> FragmentedMp4Muxer<W> {
         // Update base_decode_time for each track and clear pending samples
         for track in &mut self.tracks {
             if !track.pending_samples.is_empty() {
-                let last = track.pending_samples.last().unwrap();
+                // Safe: guarded by `if !track.pending_samples.is_empty()` above
+                let Some(last) = track.pending_samples.last() else {
+                    continue;
+                };
                 let last_dts = last.dts_ticks;
                 // Estimate next base_decode_time from last sample's DTS + one delta
                 let delta = if track.pending_samples.len() > 1 {

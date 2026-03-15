@@ -167,35 +167,40 @@ impl<R: Read + Seek> WebmDemuxer<R> {
         self.packet_buffer.clear();
         self.buffer_pos = 0;
 
-        // Read file data at current position
-        self.reader.seek(SeekFrom::Start(self.position))?;
+        let header = loop {
+            // Read file data at current position
+            self.reader.seek(SeekFrom::Start(self.position))?;
 
-        // Read enough for a header
-        let mut header_buf = [0u8; 12];
-        let bytes_read = self.reader.read(&mut header_buf)?;
-        if bytes_read < 2 {
-            self.eof = true;
-            return Ok(false);
-        }
-
-        let header = match ebml::parse_element_header(&header_buf[..bytes_read], self.position) {
-            Ok(h) => h,
-            Err(_) => {
+            // Read enough for a header
+            let mut header_buf = [0u8; 12];
+            let bytes_read = self.reader.read(&mut header_buf)?;
+            if bytes_read < 2 {
                 self.eof = true;
                 return Ok(false);
             }
+
+            let h = match ebml::parse_element_header(&header_buf[..bytes_read], self.position) {
+                Ok(h) => h,
+                Err(_) => {
+                    self.eof = true;
+                    return Ok(false);
+                }
+            };
+
+            if h.id != elements::CLUSTER {
+                // Skip non-cluster elements iteratively (avoids stack overflow
+                // on files with many consecutive non-cluster elements)
+                let total_size = h.header_size as u64 + h.data_size.unwrap_or(0);
+                self.position += total_size;
+                if self.position >= self.file_size {
+                    self.eof = true;
+                    return Ok(false);
+                }
+                continue;
+            }
+
+            break h;
         };
-
-        if header.id != elements::CLUSTER {
-            // Skip non-cluster elements
-            let total_size = header.header_size as u64 + header.data_size.unwrap_or(0);
-            self.position += total_size;
-            if self.position >= self.file_size {
-                self.eof = true;
-                return Ok(false);
-            }
-            return self.read_next_cluster();
-        }
 
         let cluster_size = match header.data_size {
             Some(s) => s,

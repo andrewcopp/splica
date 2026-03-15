@@ -352,6 +352,7 @@ pub(super) fn reencode(args: &ProcessArgs<'_>, json_mode: bool) -> Result<Transc
             };
             let scale_filter = ScaleFilter::new(enc_w, enc_h).with_aspect_mode(aspect_mode);
             builder = builder.with_filter(vtc.track_index, scale_filter);
+            builder = builder.with_output_dimensions(vtc.track_index, enc_w, enc_h);
         }
 
         // Add crop filter if --crop was specified (applied after scale)
@@ -361,6 +362,7 @@ pub(super) fn reencode(args: &ProcessArgs<'_>, json_mode: bool) -> Result<Transc
                 .into_diagnostic()
                 .wrap_err("invalid crop parameters")?;
             builder = builder.with_filter(vtc.track_index, crop_filter);
+            builder = builder.with_output_dimensions(vtc.track_index, cw, ch);
         }
     }
 

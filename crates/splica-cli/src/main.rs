@@ -64,8 +64,9 @@ enum Commands {
         #[arg(long)]
         crop: Option<String>,
 
-        /// Adjust audio volume. Accepts a linear multiplier (e.g., "0.5", "2.0")
-        /// or a dB value (e.g., "-6dB", "+3dB"). Implies re-encoding audio.
+        /// Scale audio amplitude. Accepts a linear multiplier (e.g., "0.5" = half,
+        /// "2.0" = double) or a dB value (e.g., "-6dB", "+3dB"). This is a
+        /// straight gain control, not loudness normalization. Implies re-encoding audio.
         #[arg(long)]
         volume: Option<String>,
 

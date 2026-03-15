@@ -183,13 +183,23 @@ impl<W: Write + Seek> Mp4Muxer<W> {
         self.bytes_written += size as u64;
         self.packets_written += 1;
 
-        let dts_ticks = packet.dts.ticks();
-        let cts_offset = (packet.pts.ticks() - packet.dts.ticks()) as i32;
+        let track_timescale = self.tracks[track_idx].timescale;
+        let dts_rescaled = packet
+            .dts
+            .rescale(track_timescale)
+            .map(|t| t.ticks())
+            .unwrap_or(packet.dts.ticks());
+        let pts_rescaled = packet
+            .pts
+            .rescale(track_timescale)
+            .map(|t| t.ticks())
+            .unwrap_or(packet.pts.ticks());
+        let cts_offset = (pts_rescaled - dts_rescaled) as i32;
 
         self.tracks[track_idx].samples.push(MuxSample {
             offset,
             size,
-            dts: dts_ticks,
+            dts: dts_rescaled,
             cts_offset,
             is_sync: packet.is_keyframe,
         });
@@ -435,7 +445,9 @@ fn build_stts(samples: &[MuxSample]) -> Vec<u8> {
         let delta = if i + 1 < samples.len() {
             (samples[i + 1].dts - samples[i].dts) as u32
         } else if !entries.is_empty() {
-            entries.last().unwrap().1 // repeat last delta
+            // entries is guaranteed non-empty here because i > 0
+            // implies at least one entry was pushed in a prior iteration
+            entries.last().map(|e| e.1).unwrap_or(1)
         } else {
             1
         };
