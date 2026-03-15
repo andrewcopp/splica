@@ -20,6 +20,7 @@ Thumbs.db
 .claude/settings.local.json
 .claude/personas/
 .claude/scheduled_tasks.lock
+.claude/worktrees/
 
 # Test fixtures — small CC-licensed clips (~1MB each) are tracked in git:
 # bigbuckbunny_h264.mp4, bigbuckbunny_h265.mp4, bigbuckbunny_vp9.webm,
