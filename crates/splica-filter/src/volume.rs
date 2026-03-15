@@ -32,6 +32,11 @@ impl VolumeFilter {
         Ok(Self { gain })
     }
 
+    /// Returns the linear gain factor.
+    pub fn gain(&self) -> f32 {
+        self.gain
+    }
+
     /// Creates a `VolumeFilter` from a decibel value.
     ///
     /// `0 dB` = unity, `−6 dB` ≈ half amplitude, `+6 dB` ≈ double amplitude.

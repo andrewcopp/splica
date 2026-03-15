@@ -327,6 +327,213 @@ fn open_webm_configs(file: File) -> Result<DemuxerWithConfigs> {
     })
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -----------------------------------------------------------------------
+    // parse_bitrate
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_that_bitrate_parses_megabit_suffix_uppercase() {
+        let bps = parse_bitrate("2M").unwrap();
+        assert_eq!(bps, 2_000_000);
+    }
+
+    #[test]
+    fn test_that_bitrate_parses_megabit_suffix_lowercase() {
+        let bps = parse_bitrate("1.5m").unwrap();
+        assert_eq!(bps, 1_500_000);
+    }
+
+    #[test]
+    fn test_that_bitrate_parses_kilobit_suffix_lowercase() {
+        let bps = parse_bitrate("1500k").unwrap();
+        assert_eq!(bps, 1_500_000);
+    }
+
+    #[test]
+    fn test_that_bitrate_parses_kilobit_suffix_uppercase() {
+        let bps = parse_bitrate("800K").unwrap();
+        assert_eq!(bps, 800_000);
+    }
+
+    #[test]
+    fn test_that_bitrate_parses_raw_bps() {
+        let bps = parse_bitrate("500000").unwrap();
+        assert_eq!(bps, 500_000);
+    }
+
+    #[test]
+    fn test_that_bitrate_trims_whitespace() {
+        let bps = parse_bitrate("  2M  ").unwrap();
+        assert_eq!(bps, 2_000_000);
+    }
+
+    #[test]
+    fn test_that_bitrate_rejects_empty_string() {
+        assert!(parse_bitrate("").is_err());
+    }
+
+    #[test]
+    fn test_that_bitrate_rejects_non_numeric() {
+        assert!(parse_bitrate("abcM").is_err());
+    }
+
+    #[test]
+    fn test_that_bitrate_parses_fractional_kilobits() {
+        let bps = parse_bitrate("1.5k").unwrap();
+        assert_eq!(bps, 1_500);
+    }
+
+    // -----------------------------------------------------------------------
+    // parse_resize
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_that_resize_parses_valid_dimensions() {
+        let (w, h) = parse_resize("1280x720").unwrap();
+        assert_eq!((w, h), (1280, 720));
+    }
+
+    #[test]
+    fn test_that_resize_rejects_zero_width() {
+        assert!(parse_resize("0x720").is_err());
+    }
+
+    #[test]
+    fn test_that_resize_rejects_zero_height() {
+        assert!(parse_resize("1280x0").is_err());
+    }
+
+    #[test]
+    fn test_that_resize_rejects_missing_separator() {
+        assert!(parse_resize("1280720").is_err());
+    }
+
+    #[test]
+    fn test_that_resize_rejects_extra_dimensions() {
+        assert!(parse_resize("1280x720x480").is_err());
+    }
+
+    #[test]
+    fn test_that_resize_rejects_negative_values() {
+        assert!(parse_resize("-1x720").is_err());
+    }
+
+    #[test]
+    fn test_that_resize_rejects_non_numeric() {
+        assert!(parse_resize("widexhigh").is_err());
+    }
+
+    // -----------------------------------------------------------------------
+    // parse_crop
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_that_crop_parses_valid_geometry() {
+        let (x, y, w, h) = parse_crop("1080x1080+420+0").unwrap();
+        assert_eq!((x, y, w, h), (420, 0, 1080, 1080));
+    }
+
+    #[test]
+    fn test_that_crop_rejects_zero_width() {
+        assert!(parse_crop("0x1080+420+0").is_err());
+    }
+
+    #[test]
+    fn test_that_crop_rejects_zero_height() {
+        assert!(parse_crop("1080x0+420+0").is_err());
+    }
+
+    #[test]
+    fn test_that_crop_rejects_missing_offsets() {
+        assert!(parse_crop("1080x1080").is_err());
+    }
+
+    #[test]
+    fn test_that_crop_rejects_missing_y_offset() {
+        assert!(parse_crop("1080x1080+420").is_err());
+    }
+
+    #[test]
+    fn test_that_crop_rejects_no_separator() {
+        assert!(parse_crop("1080").is_err());
+    }
+
+    #[test]
+    fn test_that_crop_allows_zero_offsets() {
+        let (x, y, w, h) = parse_crop("640x480+0+0").unwrap();
+        assert_eq!((x, y, w, h), (0, 0, 640, 480));
+    }
+
+    // -----------------------------------------------------------------------
+    // parse_volume
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_that_volume_parses_linear_gain() {
+        let vol = parse_volume("0.5").unwrap();
+        assert!((vol.gain() - 0.5).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_that_volume_parses_db_uppercase_suffix() {
+        let vol = parse_volume("-6dB").unwrap();
+        let expected = 10f32.powf(-6.0 / 20.0);
+        assert!((vol.gain() - expected).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_that_volume_parses_db_lowercase_suffix() {
+        let vol = parse_volume("-6db").unwrap();
+        let expected = 10f32.powf(-6.0 / 20.0);
+        assert!((vol.gain() - expected).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_that_volume_parses_positive_db() {
+        let vol = parse_volume("+3dB").unwrap();
+        let expected = 10f32.powf(3.0 / 20.0);
+        assert!((vol.gain() - expected).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_that_volume_parses_zero_db() {
+        let vol = parse_volume("0dB").unwrap();
+        assert!((vol.gain() - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_that_volume_rejects_negative_linear_gain() {
+        assert!(parse_volume("-1.0").is_err());
+    }
+
+    #[test]
+    fn test_that_volume_trims_whitespace() {
+        let vol = parse_volume("  1.0  ").unwrap();
+        assert!((vol.gain() - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_that_volume_rejects_non_numeric() {
+        assert!(parse_volume("loud").is_err());
+    }
+
+    #[test]
+    fn test_that_volume_unity_gain() {
+        let vol = parse_volume("1.0").unwrap();
+        assert!((vol.gain() - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_that_volume_double_gain() {
+        let vol = parse_volume("2.0").unwrap();
+        assert!((vol.gain() - 2.0).abs() < f32::EPSILON);
+    }
+}
+
 fn open_mkv_configs(file: File) -> Result<DemuxerWithConfigs> {
     let mkv = MkvDemuxer::open(BufReader::new(file))
         .into_diagnostic()
