@@ -33,11 +33,37 @@ fn emit_event(on_event: &Option<Box<dyn Fn(PipelineEvent)>>, kind: PipelineEvent
     }
 }
 
+/// Per-track frame rate limiting state.
+struct FrameRateLimit {
+    /// Minimum interval between emitted frames in seconds.
+    min_interval: f64,
+    /// PTS of the last emitted frame.
+    last_emitted_pts: Option<f64>,
+}
+
+impl FrameRateLimit {
+    fn new(max_fps: f32) -> Self {
+        Self {
+            min_interval: 1.0 / max_fps as f64,
+            last_emitted_pts: None,
+        }
+    }
+
+    /// Returns `true` if the frame should be dropped.
+    fn should_drop(&mut self, pts_secs: f64) -> bool {
+        if let Some(last) = self.last_emitted_pts {
+            if pts_secs - last < self.min_interval {
+                return true;
+            }
+        }
+        self.last_emitted_pts = Some(pts_secs);
+        false
+    }
+}
+
 /// Drains all available frames from a decoder, applies filters, encodes them,
 /// and writes resulting packets to the muxer.
-///
-/// When `max_fps` is `Some`, frames whose PTS is less than `1/max_fps`
-/// seconds after the last emitted frame are dropped before filtering/encoding.
+#[allow(clippy::too_many_arguments)]
 fn drain_decoder_to_muxer(
     decoder: &mut dyn Decoder,
     encoder: &mut dyn Encoder,
@@ -46,10 +72,8 @@ fn drain_decoder_to_muxer(
     output_track: TrackIndex,
     on_event: &Option<Box<dyn Fn(PipelineEvent)>>,
     counters: &mut PipelineCounters,
-    max_fps: Option<f32>,
-    last_emitted_pts: &mut Option<f64>,
+    mut rate_limit: Option<&mut FrameRateLimit>,
 ) -> Result<(), PipelineError> {
-    let min_interval = max_fps.map(|fps| 1.0 / fps as f64);
 
     while let Some(frame) = decoder.receive_frame()? {
         counters.frames_decoded += 1;
@@ -61,17 +85,14 @@ fn drain_decoder_to_muxer(
         );
 
         // Drop frames that exceed the max frame rate
-        if let Some(interval) = min_interval {
+        if let Some(ref mut limiter) = rate_limit {
             let pts_secs = match &frame {
                 Frame::Video(vf) => vf.pts.as_seconds_f64(),
                 Frame::Audio(af) => af.pts.as_seconds_f64(),
             };
-            if let Some(last) = *last_emitted_pts {
-                if pts_secs - last < interval {
-                    continue;
-                }
+            if limiter.should_drop(pts_secs) {
+                continue;
             }
-            *last_emitted_pts = Some(pts_secs);
         }
 
         // Apply video filters if the frame is video
@@ -230,8 +251,12 @@ impl Pipeline {
             packets_written: 0,
         };
 
-        // Per-track state for frame rate limiting
-        let mut last_emitted_pts: HashMap<TrackIndex, Option<f64>> = HashMap::new();
+        // Per-track frame rate limiting state
+        let mut rate_limits: HashMap<TrackIndex, FrameRateLimit> = self
+            .max_fps
+            .iter()
+            .map(|(&track, &fps)| (track, FrameRateLimit::new(fps)))
+            .collect();
 
         // Main demux loop
         while let Some(packet) = self.demuxer.read_packet()? {
@@ -262,8 +287,6 @@ impl Pipeline {
                     filters,
                 }) => {
                     decoder.send_packet(Some(&packet))?;
-                    let track_max_fps = self.max_fps.get(&input_track).copied();
-                    let pts_state = last_emitted_pts.entry(input_track).or_insert(None);
                     drain_decoder_to_muxer(
                         decoder.as_mut(),
                         encoder.as_mut(),
@@ -272,8 +295,7 @@ impl Pipeline {
                         output_track,
                         &self.on_event,
                         &mut counters,
-                        track_max_fps,
-                        pts_state,
+                        rate_limits.get_mut(&input_track),
                     )?;
                 }
                 Some(TrackMode::AudioTranscode {
@@ -320,8 +342,6 @@ impl Pipeline {
                 }) => {
                     // Signal end-of-stream to decoder, drain remaining frames
                     decoder.send_packet(None)?;
-                    let track_max_fps = self.max_fps.get(&track_idx).copied();
-                    let pts_state = last_emitted_pts.entry(track_idx).or_insert(None);
                     drain_decoder_to_muxer(
                         decoder.as_mut(),
                         encoder.as_mut(),
@@ -330,8 +350,7 @@ impl Pipeline {
                         output_track,
                         &self.on_event,
                         &mut counters,
-                        track_max_fps,
-                        pts_state,
+                        rate_limits.get_mut(&track_idx),
                     )?;
 
                     // Signal end-of-stream to encoder, drain remaining packets
