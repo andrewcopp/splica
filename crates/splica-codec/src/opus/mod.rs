@@ -1,13 +1,14 @@
 //! Opus codec using libopus (FFI).
 //!
-//! Wraps the `opus` crate behind the `codec-opus` feature flag.
+//! Wraps the `opus` crate behind the `decode-opus` and `encode-opus` feature flags.
 //! Uses FFI to the reference Opus encoder and decoder libraries.
 
-#[cfg(feature = "codec-opus")]
+#[cfg(feature = "decode-opus")]
 mod decoder;
-#[cfg(feature = "codec-opus")]
-mod encoder;
-#[cfg(feature = "codec-opus")]
+#[cfg(feature = "decode-opus")]
 pub use decoder::{OpusDecoder, OpusDecoderConfig};
-#[cfg(feature = "codec-opus")]
+
+#[cfg(feature = "encode-opus")]
+mod encoder;
+#[cfg(feature = "encode-opus")]
 pub use encoder::{OpusEncoder, OpusEncoderBuilder, OpusEncoderConfig};
