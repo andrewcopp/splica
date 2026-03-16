@@ -218,6 +218,11 @@ fn make_track(index: u32) -> TrackInfo {
             pixel_format: Some(PixelFormat::Yuv420p),
             color_space: None,
             frame_rate: FrameRate::new(30, 1),
+            profile: None,
+            level: None,
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
         }),
         audio: None,
     }

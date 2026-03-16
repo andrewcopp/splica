@@ -101,12 +101,23 @@ impl Mp4Track {
 
             let frame_rate = self.compute_frame_rate();
 
+            let (profile, level) = self.extract_profile_level();
+            let color_primaries = color_space.map(|cs| format_color_primaries(&cs));
+            let transfer_characteristics =
+                color_space.map(|cs| format_transfer_characteristics(&cs));
+            let matrix_coefficients = color_space.map(|cs| format_matrix_coefficients(&cs));
+
             Some(VideoTrackInfo {
                 width: w,
                 height: h,
                 pixel_format: Some(PixelFormat::Yuv420p),
                 color_space,
                 frame_rate,
+                profile,
+                level,
+                color_primaries,
+                transfer_characteristics,
+                matrix_coefficients,
             })
         } else {
             None
@@ -149,6 +160,46 @@ impl Mp4Track {
         }
     }
 
+    /// Extracts codec profile and level from the raw codec configuration bytes.
+    fn extract_profile_level(&self) -> (Option<String>, Option<String>) {
+        match &self.codec_config {
+            CodecConfig::Avc1 { avcc, .. } => {
+                if avcc.len() >= 4 {
+                    let profile_idc = avcc[1];
+                    let level_idc = avcc[3];
+                    let profile = format_h264_profile(profile_idc);
+                    let level = format_h264_level(level_idc);
+                    (Some(profile), Some(level))
+                } else {
+                    (None, None)
+                }
+            }
+            CodecConfig::Hev1 { hvcc, .. } => {
+                if hvcc.len() >= 13 {
+                    let general_profile_idc = hvcc[1] & 0x1F;
+                    let general_level_idc = hvcc[12];
+                    let profile = format_h265_profile(general_profile_idc);
+                    let level = format_h265_level(general_level_idc);
+                    (Some(profile), Some(level))
+                } else {
+                    (None, None)
+                }
+            }
+            CodecConfig::Av1 { av1c, .. } => {
+                if av1c.len() >= 2 {
+                    let seq_profile = (av1c[1] >> 5) & 0x07;
+                    let seq_level_idx = av1c[1] & 0x1F;
+                    let profile = format_av1_profile(seq_profile);
+                    let level = format_av1_level(seq_level_idx);
+                    (Some(profile), Some(level))
+                } else {
+                    (None, None)
+                }
+            }
+            _ => (None, None),
+        }
+    }
+
     fn compute_frame_rate(&self) -> Option<FrameRate> {
         // Compute from sample table: total_duration / sample_count
         if self.sample_table.entries.is_empty() || self.timescale == 0 {
@@ -183,4 +234,90 @@ fn gcd(mut a: u64, mut b: u64) -> u64 {
         a = t;
     }
     a
+}
+
+// ---------------------------------------------------------------------------
+// Codec profile/level formatting
+// ---------------------------------------------------------------------------
+
+fn format_h264_profile(profile_idc: u8) -> String {
+    match profile_idc {
+        66 => "Baseline".to_string(),
+        77 => "Main".to_string(),
+        88 => "Extended".to_string(),
+        100 => "High".to_string(),
+        110 => "High 10".to_string(),
+        122 => "High 4:2:2".to_string(),
+        244 => "High 4:4:4 Predictive".to_string(),
+        _ => format!("Unknown ({profile_idc})"),
+    }
+}
+
+fn format_h264_level(level_idc: u8) -> String {
+    let major = level_idc / 10;
+    let minor = level_idc % 10;
+    format!("{major}.{minor}")
+}
+
+fn format_h265_profile(general_profile_idc: u8) -> String {
+    match general_profile_idc {
+        1 => "Main".to_string(),
+        2 => "Main 10".to_string(),
+        3 => "Main Still Picture".to_string(),
+        4 => "Range Extensions".to_string(),
+        _ => format!("Unknown ({general_profile_idc})"),
+    }
+}
+
+fn format_h265_level(general_level_idc: u8) -> String {
+    let major = general_level_idc / 30;
+    let minor = (general_level_idc % 30) / 3;
+    format!("{major}.{minor}")
+}
+
+fn format_av1_profile(seq_profile: u8) -> String {
+    match seq_profile {
+        0 => "Main".to_string(),
+        1 => "High".to_string(),
+        2 => "Professional".to_string(),
+        _ => format!("Unknown ({seq_profile})"),
+    }
+}
+
+fn format_av1_level(seq_level_idx: u8) -> String {
+    let major = 2 + (seq_level_idx >> 2);
+    let minor = seq_level_idx & 0x03;
+    format!("{major}.{minor}")
+}
+
+// ---------------------------------------------------------------------------
+// Color parameter formatting
+// ---------------------------------------------------------------------------
+
+fn format_color_primaries(cs: &splica_core::ColorSpace) -> String {
+    use splica_core::media::ColorPrimaries;
+    match cs.primaries {
+        ColorPrimaries::Bt709 => "BT.709".to_string(),
+        ColorPrimaries::Bt2020 => "BT.2020".to_string(),
+        ColorPrimaries::Smpte432 => "SMPTE 432".to_string(),
+    }
+}
+
+fn format_transfer_characteristics(cs: &splica_core::ColorSpace) -> String {
+    use splica_core::media::TransferCharacteristics;
+    match cs.transfer {
+        TransferCharacteristics::Bt709 => "BT.709".to_string(),
+        TransferCharacteristics::Smpte2084 => "SMPTE ST 2084".to_string(),
+        TransferCharacteristics::HybridLogGamma => "HLG".to_string(),
+    }
+}
+
+fn format_matrix_coefficients(cs: &splica_core::ColorSpace) -> String {
+    use splica_core::media::MatrixCoefficients;
+    match cs.matrix {
+        MatrixCoefficients::Identity => "Identity".to_string(),
+        MatrixCoefficients::Bt709 => "BT.709".to_string(),
+        MatrixCoefficients::Bt2020NonConstant => "BT.2020 non-constant".to_string(),
+        MatrixCoefficients::Bt2020Constant => "BT.2020 constant".to_string(),
+    }
 }

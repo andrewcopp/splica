@@ -54,6 +54,11 @@ fn build_mkv_with_subtitle(subtitle_codec: SubtitleCodec) -> Vec<u8> {
                 pixel_format: None,
                 color_space: None,
                 frame_rate: None,
+                profile: None,
+                level: None,
+                color_primaries: None,
+                transfer_characteristics: None,
+                matrix_coefficients: None,
             }),
             audio: None,
         };
