@@ -12,3 +12,4 @@ splica-core.workspace = true
 
 [dev-dependencies]
 bytes.workspace = true
+splica-mp4.workspace = true
