@@ -38,26 +38,25 @@ Exit code convention: 0=success, 1=bad input (no retry), 2=internal error (retry
 
 Any crate that adds FFI must simultaneously add a feature flag that excludes it, and CI must verify the pure-Rust build for wasm32-unknown-unknown. Each codec has its own independent flag (`codec-h264`, `codec-h265`, `codec-aac`, `codec-opus`, `codec-av1` — Sprint 12) — they are not folded into a single `native-codecs` umbrella.
 
-## Codebase State as of Sprint 27 complete / Sprint 28 planning (2026-03-16)
+## Codebase State as of Sprint 28 complete / Sprint 29 planning (2026-03-16)
 
-Sprints 1–27 complete. Full codec matrix: H.264 (dec+enc), H.265 (dec+enc via kvazaar), AV1 (dec+enc), AAC (dec+enc), Opus (dec+enc). Containers: MP4 (demux+mux), WebM (demux+mux), MKV (demux+mux). Filters: Scale, Volume, Crop. WASM: WasmMp4Demuxer + WasmWebmDemuxer + WasmMkvDemuxer — full packet/config/seek parity. CLI: process, probe, trim, join, extract-audio, migrate. Exit code contract in --help. Subtitle passthrough. Post-run summary. --audio-codec, --audio-bitrate flags. Per-direction feature flags.
+Sprints 1–28 complete. Full codec matrix: H.264 (dec+enc), H.265 (dec+enc via kvazaar), AV1 (dec+enc), AAC (dec+enc), Opus (dec+enc). Containers: MP4 (demux+mux), WebM (demux+mux), MKV (demux+mux). Filters: Scale, Volume, Crop. WASM: WasmMp4Demuxer + WasmWebmDemuxer + WasmMkvDemuxer — full packet/config/seek parity. CLI: process, probe, trim, join, extract-audio, migrate. Exit code contract in --help. Subtitle passthrough. Post-run summary. --audio-codec, --audio-bitrate flags. Per-direction feature flags.
 
-**Sprint 27 delivered (feature sprint — credibility artifacts):**
-- SPL-182: Adversarial fixture library — 11 tests, structured errors for bad input
-- SPL-183: Encode matrix — 23 tests, probe assertions across MP4/WebM/MKV × H.264/H.265/AV1
-- SPL-184: Frame rate/sample rate passthrough tests — DISCOVERED P0 bug (see below)
+**Sprint 28 delivered (P0 fixes + cleanup):**
+- SPL-185: Transcode frame rate P0 fixed — encoders now preserve input PTS, not reconstruct from poc
+- SPL-186: Resize metadata P0 fixed — container now writes encoded dimensions, not pre-scale dimensions
+- SPL-189: VP9 re-encode gives actionable error instead of generic failure
+- SPL-187: AV1 encoder flush unwrap replaced with expect + safety comment
+- SPL-188: EBML doctype scanner unit tests added
 
-**P0 discovered by Sprint 27 tests (auto-schedules to Sprint 28):**
-- H.265 transcode: 30fps input → 2.67fps output (silent, exits 0)
-- AV1 transcode: 30fps input → 98fps output, duration 10s → 111s (silent, exits 0)
-- Root cause: transcode decode-encode roundtrip mangling timestamps in pipeline layer
+**Sprint 29 is the LAST feature sprint before the mandatory debt sprint.**
 
-**Red cells from encode matrix (Sprint 28 triage needed):**
-- Probe reports pre-scale resolution after ScaleFilter — affects Jordan/Elena QC workflows
-- VP9 decode blocks re-encode (missing feature, needs explicit error not silent failure)
-- WebM/AV1 output blocked by rav1e speed in debug builds — CI reliability gap
+**Top 3 priorities for Sprint 29:**
+1. SPL-122 — WASM container detection (serves Marcus + Alex simultaneously, 17-sprint carry)
+2. SPL-121 — `--audio-codec` flag (Jordan's audio codec selection gap, 17-sprint carry, implicit behavior anti-pattern)
+3. SPL-123 — Exit code contract as versioned public artifact (Priya's retry automation unblocked)
 
-**Still open in backlog:** SPL-122 (WASM container detection — high leverage for Alex), SPL-123 (exit code contract as versioned artifact), SPL-169 (probe JSON codec parameter expansion), SPL-170 (WASM H.264 frame decode), SPL-145/146 (SPL-146 may be duplicate of done SPL-152 — verify with Dana).
+**Still open in backlog:** SPL-122, SPL-121, SPL-123, SPL-169 (probe JSON codec params — Elena, post-debt), SPL-170 (WASM H.264 frame decode — no pull signal yet), SPL-145/146 (verify SPL-146 vs done SPL-152 with Dana), SPL-149 (media.rs split — debt sprint candidate).
 
 ## Key Decision: trim --format json = single-shot JSON, not NDJSON (2026-03-11)
 
@@ -169,8 +168,8 @@ Three [ARCHIVED] pages exist from old structure — do not use.
 **Team:** Splica (SPL) | **Project:** splica v0.1
 
 **Milestones:**
-- Phase 0 through Sprint 21 — all complete
-- Sprint 22 — active (debt sprint)
+- Phase 0 through Sprint 28 — all complete
+- Sprint 29 — planning (last feature sprint before debt)
 
 **Labels** (domain-based only): `core-infra`, `codec`, `container`, `dx`
 
@@ -199,16 +198,14 @@ Rule: report written at sprint close, before next sprint planning. Never edited 
 
 **x265 is GPL-2.0** — incompatible with splica's Apache-2.0 license. SPL-87's original description said "LGPL — same as libde265" — this was wrong. kvazaar (University of Tampere) is BSD-3-Clause, fully compatible. Competitive quality at fast-to-medium presets. No existing Rust bindings — requires creating `kvazaar-sys` (bindgen) as a prerequisite. Feature flag: `codec-h265-enc` (separate from `codec-h265` which gates libde265-rs decode — they are different C libraries). VUI color support confirmed in kvazaar API.
 
-## Focus Group Rounds — see focus-group-rounds.md for Rounds 15–17 detail
+## Focus Group Rounds — see focus-group-rounds.md for Rounds 15–18 detail
 
-Round 17 (Post-Sprint 27, 2026-03-16) key findings:
-- P0 transcode timestamp bug auto-schedules to Sprint 28 (H.265: 30fps→2.67fps, AV1: 30fps→98fps)
-- Probe-after-scale resolution bug is a QC correctness failure for Jordan and Elena — High priority Sprint 28
-- SPL-123 (exit code contract as versioned artifact) must enter Sprint 28 — Priya's root need unserved
-- VP9 re-encode gap needs explicit error, not silent failure — ffmpeg anti-pattern to fix
-- WebM/AV1/rav1e-in-debug: mark those matrix cells #[ignore] with explanation until resolved
-- SPL-122 (WASM container detection) and SPL-170 (WASM H.264 frame decode) deferred to Sprint 29 — don't mix correctness triage with feature work
-- Sprint 28 thesis: turn Sprint 27's red cells green. When the matrix is clean, we have a credible "90% case" claim.
+Round 18 (Post-Sprint 28, 2026-03-16) key findings:
+- Both P0s fixed: PTS/frame rate (H.265 + AV1 transcode) and resize metadata
+- Sprint 29 top 3: SPL-122 (WASM container detection), SPL-121 (--audio-codec flag), SPL-123 (exit code contract versioned)
+- SPL-169 (probe JSON codec params) deferred post-debt — additive, no urgency
+- SPL-170 (WASM H.264 frame decode) still deferred — no pull signal from real JS callers
+- Sprint 29 is the LAST feature sprint before mandatory debt sprint
 
 ## Sprint 21: Benchmark Demos — COMPLETE (2026-03-14)
 

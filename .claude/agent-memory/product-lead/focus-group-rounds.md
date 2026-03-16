@@ -1,5 +1,5 @@
 ---
-name: Focus Group Rounds 15–17
+name: Focus Group Rounds 15–18
 description: Detailed persona findings and sprint priority calls from post-sprint focus groups
 type: project
 ---
@@ -48,3 +48,23 @@ Sprint 27 delivered: adversarial fixtures (11 tests), encode matrix (23 tests), 
 - Deferred to Sprint 29: SPL-122 (WASM container detection), SPL-170 (WASM H.264 frame decode) — don't mix correctness triage with feature work
 
 **Sprint 28 thesis:** Turn Sprint 27's red cells green. A clean matrix is the prerequisite for the credibility claim that splica handles the 90% case correctly — and the prerequisite for everything after (reliability comparison, adoption initiatives, benchmark demos).
+
+## Round 18 — Post-Sprint 28 (2026-03-16)
+
+Sprint 28 delivered: both P0s fixed (PTS/frame rate + resize metadata), VP9 clear error, AV1 unwrap cleanup, EBML doctype tests. Sprint 28 is the 2nd of 3 feature sprints before mandatory debt sprint.
+
+**Persona reactions:**
+- Jordan: post-run summary + correct resize metadata = trusts output again. Top request: SPL-121 (`--audio-codec` flag) — still doesn't know what audio codec she's getting without probing.
+- Priya: VP9 explicit error is the signal she needed for pipeline routing. Top request: SPL-123 — exit code contract not linkable/versioned, retry logic betting on invisible behavior.
+- Marcus: Frame rate correctness mattered more than he flagged (wrong PTS = downstream decoder stutter). Top request: SPL-122 — three parallel JS code paths is not zero-cost abstraction.
+- Elena: Two P0s fixed in one sprint = trust signal. Watching encode matrix red cells closely. Top request: SPL-169 (probe JSON codec params — profile, level, color primaries for machine-readable QC).
+- Alex: SPL-122 is his top request too — can't build an SDK on three parallel container imports. 17-sprint carry.
+
+**Sprint 29 priorities (last feature sprint before debt):**
+1. SPL-122 — WASM container detection (Marcus + Alex, 17-sprint carry, unblocks SDK story)
+2. SPL-121 — `--audio-codec` flag (Jordan, 17-sprint carry, implicit audio selection is ffmpeg anti-pattern)
+3. SPL-123 — Exit code contract as versioned artifact (Priya, automation correctness)
+
+**Deferred:** SPL-169 (Elena, additive, no urgency — post-debt). SPL-170 (Alex, no pull signal from real JS callers).
+
+**Note on MEMORY.md line count:** MEMORY.md is at/near 200-line truncation limit. Trim before Sprint 30 planning — move older decisions to topic files.
