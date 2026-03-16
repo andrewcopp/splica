@@ -192,8 +192,8 @@ impl<R: Read + Seek> Mp4Demuxer<R> {
                 FourCC::TRAK => {
                     match parse_track(parsed.body, parsed.offset, &movie_header) {
                         Ok(track) => {
-                            // Only keep video and audio tracks
-                            if track.is_video() || track.is_audio() {
+                            // Only keep video, audio, and subtitle tracks
+                            if track.is_video() || track.is_audio() || track.is_subtitle() {
                                 mp4_tracks.push(track);
                             }
                         }

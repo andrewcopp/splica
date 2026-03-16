@@ -41,6 +41,7 @@ pub(super) fn is_video_codec_compatible(codec: &Codec, container: ContainerForma
             }
         },
         Codec::Audio(_) => true, // audio compatibility is handled separately
+        Codec::Subtitle(_) => true, // subtitles pass through via stream copy
     }
 }
 

@@ -10,7 +10,8 @@
 use std::io::{Seek, SeekFrom, Write};
 
 use splica_core::{
-    AudioCodec, Codec, MuxError, Muxer, Packet, TrackIndex, TrackInfo, TrackKind, VideoCodec,
+    AudioCodec, Codec, MuxError, Muxer, Packet, SubtitleCodec, TrackIndex, TrackInfo, TrackKind,
+    VideoCodec,
 };
 
 use crate::ebml;
@@ -189,6 +190,12 @@ impl<W: Write + Seek> WebmMuxer<W> {
                     entry.extend_from_slice(&ebml::build_element(elements::AUDIO, &audio_body));
                 }
             }
+            TrackKind::Subtitle => {
+                entry.extend_from_slice(&ebml::uint_element(
+                    elements::TRACK_TYPE,
+                    elements::TRACK_TYPE_SUBTITLE,
+                ));
+            }
         }
 
         Ok(entry)
@@ -309,6 +316,9 @@ fn codec_to_webm_id(codec: &Codec) -> Result<String, MuxError> {
                 container: "WebM".to_string(),
             }),
         },
+        Codec::Subtitle(SubtitleCodec::Srt) => Ok(elements::CODEC_ID_SRT.to_string()),
+        Codec::Subtitle(SubtitleCodec::WebVtt) => Ok(elements::CODEC_ID_WEBVTT.to_string()),
+        Codec::Subtitle(SubtitleCodec::Other(s)) => Ok(s.clone()),
     }
 }
 

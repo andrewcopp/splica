@@ -173,6 +173,9 @@ impl WasmMkvDemuxer {
             Codec::Audio(_) => Err(JsValue::from_str(
                 "video track has audio codec (unexpected)",
             )),
+            Codec::Subtitle(_) => Err(JsValue::from_str(
+                "video track has subtitle codec (unexpected)",
+            )),
         }
     }
 
@@ -334,6 +337,9 @@ impl WasmMkvDemuxer {
             ))),
             Codec::Video(_) => Err(JsValue::from_str(
                 "audio track has video codec (unexpected)",
+            )),
+            Codec::Subtitle(_) => Err(JsValue::from_str(
+                "audio track has subtitle codec (unexpected)",
             )),
         }
     }

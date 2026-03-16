@@ -22,8 +22,8 @@ use std::io::Write;
 use splica_core::{MuxError, Muxer, Packet, TrackIndex, TrackInfo, TrackKind};
 
 use crate::box_builders::{
-    build_dinf, build_hdlr, build_mdhd, build_mvhd, build_smhd, build_stsd, build_tkhd, build_vmhd,
-    io_err, make_box, make_full_box,
+    build_dinf, build_hdlr, build_mdhd, build_mvhd, build_nmhd, build_smhd, build_stsd,
+    build_tkhd, build_vmhd, io_err, make_box, make_full_box,
 };
 use crate::boxes::hdlr::HandlerType;
 use crate::boxes::stsd::CodecConfig;
@@ -173,10 +173,10 @@ impl<W: Write> FragmentedMp4Muxer<W> {
         let tkhd = build_tkhd(track_id, 0, width, height);
 
         let mdhd = build_mdhd(track.timescale, 0);
-        let handler = if track.track_info.kind == TrackKind::Video {
-            HandlerType::Video
-        } else {
-            HandlerType::Audio
+        let handler = match track.track_info.kind {
+            TrackKind::Video => HandlerType::Video,
+            TrackKind::Audio => HandlerType::Audio,
+            TrackKind::Subtitle => HandlerType::Subtitle,
         };
         let hdlr = build_hdlr(handler);
 
@@ -196,10 +196,10 @@ impl<W: Write> FragmentedMp4Muxer<W> {
         stbl_body.extend_from_slice(&stco);
         let stbl = make_box(b"stbl", &stbl_body);
 
-        let xmhd = if track.track_info.kind == TrackKind::Video {
-            build_vmhd()
-        } else {
-            build_smhd()
+        let xmhd = match track.track_info.kind {
+            TrackKind::Video => build_vmhd(),
+            TrackKind::Audio => build_smhd(),
+            TrackKind::Subtitle => build_nmhd(),
         };
         let dinf = build_dinf();
 
@@ -358,9 +358,10 @@ impl<W: Write> Muxer for FragmentedMp4Muxer<W> {
                 channel_count: 2,
                 esds: bytes::Bytes::new(),
             },
+            (TrackKind::Subtitle, _, _) => CodecConfig::Unknown(info.codec.to_string()),
             _ => {
                 return Err(MuxError::InvalidTrackConfig {
-                    message: "track must have video or audio metadata".to_string(),
+                    message: "track must have video, audio, or subtitle metadata".to_string(),
                 })
             }
         };

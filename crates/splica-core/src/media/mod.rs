@@ -215,11 +215,36 @@ impl std::fmt::Display for AudioCodec {
     }
 }
 
-/// A codec identifier (video or audio).
+/// Supported subtitle codecs.
+///
+/// Subtitles are always passed through (stream copy) — splica does not
+/// decode or re-encode subtitle tracks.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum SubtitleCodec {
+    /// SubRip / SRT text subtitles.
+    Srt,
+    /// WebVTT text subtitles.
+    WebVtt,
+    /// A subtitle codec not directly known to splica.
+    Other(String),
+}
+
+impl std::fmt::Display for SubtitleCodec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SubtitleCodec::Srt => f.write_str("SRT"),
+            SubtitleCodec::WebVtt => f.write_str("WebVTT"),
+            SubtitleCodec::Other(s) => f.write_str(s),
+        }
+    }
+}
+
+/// A codec identifier (video, audio, or subtitle).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Codec {
     Video(VideoCodec),
     Audio(AudioCodec),
+    Subtitle(SubtitleCodec),
 }
 
 impl std::fmt::Display for Codec {
@@ -227,6 +252,7 @@ impl std::fmt::Display for Codec {
         match self {
             Codec::Video(vc) => vc.fmt(f),
             Codec::Audio(ac) => ac.fmt(f),
+            Codec::Subtitle(sc) => sc.fmt(f),
         }
     }
 }
@@ -312,6 +338,7 @@ impl Frame {
 pub enum TrackKind {
     Video,
     Audio,
+    Subtitle,
 }
 
 /// Metadata about a single track in a container.

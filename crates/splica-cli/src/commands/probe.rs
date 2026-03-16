@@ -84,6 +84,7 @@ fn probe_inner(file: &Path, format: &OutputFormat) -> Result<()> {
             let kind = match t.kind {
                 TrackKind::Video => "video",
                 TrackKind::Audio => "audio",
+                TrackKind::Subtitle => "subtitle",
             };
 
             ProbeTrack {

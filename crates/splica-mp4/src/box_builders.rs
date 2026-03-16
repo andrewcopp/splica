@@ -110,6 +110,12 @@ pub(crate) fn build_smhd() -> Vec<u8> {
     make_full_box(b"smhd", &body)
 }
 
+/// Builds an `nmhd` (Null Media Header) box for subtitle/text tracks.
+pub(crate) fn build_nmhd() -> Vec<u8> {
+    let body = [0u8; 4]; // version=0, flags=0
+    make_full_box(b"nmhd", &body)
+}
+
 /// Builds a `dinf` (Data Information) box containing a self-contained `dref`.
 pub(crate) fn build_dinf() -> Vec<u8> {
     let mut url_body = Vec::new();

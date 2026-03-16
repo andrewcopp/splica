@@ -1,8 +1,8 @@
 //! Per-track metadata assembled from parsed MP4 boxes.
 
 use splica_core::{
-    AudioCodec, AudioTrackInfo, ChannelLayout, Codec, FrameRate, PixelFormat, Timestamp,
-    TrackIndex, TrackInfo, TrackKind, VideoCodec, VideoTrackInfo,
+    AudioCodec, AudioTrackInfo, ChannelLayout, Codec, FrameRate, PixelFormat, SubtitleCodec,
+    Timestamp, TrackIndex, TrackInfo, TrackKind, VideoCodec, VideoTrackInfo,
 };
 
 use crate::boxes::hdlr::HandlerType;
@@ -33,9 +33,15 @@ impl Mp4Track {
         self.handler_type == HandlerType::Audio
     }
 
+    pub fn is_subtitle(&self) -> bool {
+        self.handler_type == HandlerType::Subtitle
+    }
+
     pub fn to_track_info(&self, index: TrackIndex) -> TrackInfo {
         let kind = if self.is_video() {
             TrackKind::Video
+        } else if self.is_subtitle() {
+            TrackKind::Subtitle
         } else {
             TrackKind::Audio
         };
@@ -48,6 +54,13 @@ impl Mp4Track {
             CodecConfig::Unknown(name) => {
                 if self.is_video() {
                     Codec::Video(VideoCodec::Other(name.clone()))
+                } else if self.is_subtitle() {
+                    let sc = match name.as_str() {
+                        "tx3g" | "stpp" => SubtitleCodec::Other(name.clone()),
+                        "wvtt" => SubtitleCodec::WebVtt,
+                        _ => SubtitleCodec::Other(name.clone()),
+                    };
+                    Codec::Subtitle(sc)
                 } else {
                     Codec::Audio(AudioCodec::Other(name.clone()))
                 }

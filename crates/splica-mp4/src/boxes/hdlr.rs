@@ -10,6 +10,8 @@ pub enum HandlerType {
     Video,
     /// Audio track (`b"soun"`).
     Audio,
+    /// Subtitle track (`b"sbtl"` or `b"text"`).
+    Subtitle,
     /// Any other handler type.
     Other([u8; 4]),
 }
@@ -20,6 +22,7 @@ impl HandlerType {
         match self {
             HandlerType::Video => b"vide",
             HandlerType::Audio => b"soun",
+            HandlerType::Subtitle => b"sbtl",
             HandlerType::Other(fourcc) => fourcc,
         }
     }
@@ -28,6 +31,7 @@ impl HandlerType {
         match &bytes {
             b"vide" => HandlerType::Video,
             b"soun" => HandlerType::Audio,
+            b"sbtl" | b"text" | b"subt" => HandlerType::Subtitle,
             _ => HandlerType::Other(bytes),
         }
     }

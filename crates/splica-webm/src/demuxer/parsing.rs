@@ -6,8 +6,8 @@
 use std::io::{Read, Seek, SeekFrom};
 
 use splica_core::{
-    AudioCodec, AudioTrackInfo, ChannelLayout, Codec, Timestamp, TrackIndex, TrackInfo, TrackKind,
-    VideoCodec, VideoTrackInfo,
+    AudioCodec, AudioTrackInfo, ChannelLayout, Codec, SubtitleCodec, Timestamp, TrackIndex,
+    TrackInfo, TrackKind, VideoCodec, VideoTrackInfo,
 };
 
 use crate::ebml;
@@ -394,6 +394,14 @@ pub(crate) fn build_track_info(
                 }
             };
             (TrackKind::Audio, Codec::Audio(audio_codec))
+        }
+        elements::TRACK_TYPE_SUBTITLE => {
+            let subtitle_codec = match track.codec_id.as_str() {
+                elements::CODEC_ID_SRT => SubtitleCodec::Srt,
+                elements::CODEC_ID_WEBVTT => SubtitleCodec::WebVtt,
+                other => SubtitleCodec::Other(other.to_string()),
+            };
+            (TrackKind::Subtitle, Codec::Subtitle(subtitle_codec))
         }
         _ => {
             return Err(WebmError::UnsupportedCodec {
