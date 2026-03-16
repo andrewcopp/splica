@@ -23,18 +23,14 @@ use splica_core::{MuxError, Muxer, Packet, TrackIndex, TrackInfo, TrackKind};
 
 use crate::box_builders::{
     build_dinf, build_hdlr, build_mdhd, build_mvhd, build_smhd, build_stsd, build_tkhd, build_vmhd,
-    io_err, make_box, make_full_box,
+    io_err, make_box,
 };
 use crate::boxes::hdlr::HandlerType;
 use crate::boxes::stsd::CodecConfig;
-
-/// A sample buffered within a fragment before it is flushed.
-struct FragmentSample {
-    data: Vec<u8>,
-    dts_ticks: i64,
-    cts_offset: i32,
-    is_keyframe: bool,
-}
+use crate::fmp4_box_builders::{
+    build_empty_stco, build_empty_stsc, build_empty_stsz, build_empty_stts, build_fmp4_ftyp,
+    build_mfhd, build_traf, build_trex, FragmentSample,
+};
 
 /// Per-track state for the fragmented muxer.
 struct FMuxTrack {
@@ -323,7 +319,12 @@ impl<W: Write> FragmentedMp4Muxer<W> {
                 continue;
             }
             let data_offset = data_offset_base + track_data_offsets[i] as u32;
-            let traf = build_traf(i as u32 + 1, track, data_offset)?;
+            let traf = build_traf(
+                i as u32 + 1,
+                track.base_decode_time,
+                &track.pending_samples,
+                data_offset,
+            )?;
             traf_boxes.extend_from_slice(&traf);
         }
 
@@ -375,162 +376,4 @@ impl<W: Write> Muxer for FragmentedMp4Muxer<W> {
     fn finalize(&mut self) -> Result<(), MuxError> {
         self.finalize_file()
     }
-}
-
-// ---------------------------------------------------------------------------
-// fMP4-specific box building helpers
-// ---------------------------------------------------------------------------
-
-/// ftyp for fragmented MP4 — uses iso5/iso6/msdh brands.
-fn build_fmp4_ftyp() -> Vec<u8> {
-    let mut body = Vec::new();
-    body.extend_from_slice(b"iso5"); // major brand
-    body.extend_from_slice(&1u32.to_be_bytes()); // minor version
-    body.extend_from_slice(b"iso5"); // compatible brands
-    body.extend_from_slice(b"iso6");
-    body.extend_from_slice(b"msdh");
-    body.extend_from_slice(b"msix");
-    make_box(b"ftyp", &body)
-}
-
-// Empty sample table boxes for the init segment
-fn build_empty_stts() -> Vec<u8> {
-    let mut body = vec![0, 0, 0, 0]; // version+flags
-    body.extend_from_slice(&0u32.to_be_bytes()); // entry_count = 0
-    make_full_box(b"stts", &body)
-}
-
-fn build_empty_stsc() -> Vec<u8> {
-    let mut body = vec![0, 0, 0, 0];
-    body.extend_from_slice(&0u32.to_be_bytes());
-    make_full_box(b"stsc", &body)
-}
-
-fn build_empty_stsz() -> Vec<u8> {
-    let mut body = vec![0, 0, 0, 0];
-    body.extend_from_slice(&0u32.to_be_bytes()); // default_sample_size
-    body.extend_from_slice(&0u32.to_be_bytes()); // sample_count
-    make_full_box(b"stsz", &body)
-}
-
-fn build_empty_stco() -> Vec<u8> {
-    let mut body = vec![0, 0, 0, 0];
-    body.extend_from_slice(&0u32.to_be_bytes()); // entry_count
-    make_full_box(b"stco", &body)
-}
-
-/// trex (Track Extends) — default values for track fragments.
-fn build_trex(track_id: u32) -> Vec<u8> {
-    let mut body = Vec::new();
-    body.extend_from_slice(&[0, 0, 0, 0]); // version=0, flags=0
-    body.extend_from_slice(&track_id.to_be_bytes());
-    body.extend_from_slice(&1u32.to_be_bytes()); // default_sample_description_index
-    body.extend_from_slice(&0u32.to_be_bytes()); // default_sample_duration
-    body.extend_from_slice(&0u32.to_be_bytes()); // default_sample_size
-    body.extend_from_slice(&0u32.to_be_bytes()); // default_sample_flags
-    make_full_box(b"trex", &body)
-}
-
-/// mfhd (Movie Fragment Header).
-fn build_mfhd(sequence_number: u32) -> Vec<u8> {
-    let mut body = Vec::new();
-    body.extend_from_slice(&[0, 0, 0, 0]); // version=0, flags=0
-    body.extend_from_slice(&sequence_number.to_be_bytes());
-    make_full_box(b"mfhd", &body)
-}
-
-/// Build a traf box for one track's fragment.
-fn build_traf(track_id: u32, track: &FMuxTrack, data_offset: u32) -> Result<Vec<u8>, MuxError> {
-    let tfhd = build_tfhd(track_id);
-    let tfdt = build_tfdt(track.base_decode_time);
-    let trun = build_trun(&track.pending_samples, data_offset);
-
-    let mut traf_body = tfhd;
-    traf_body.extend_from_slice(&tfdt);
-    traf_body.extend_from_slice(&trun);
-    Ok(make_box(b"traf", &traf_body))
-}
-
-/// tfhd (Track Fragment Header).
-///
-/// Uses flag 0x020000 (default-base-is-moof) so data_offset in trun
-/// is relative to the moof box start.
-fn build_tfhd(track_id: u32) -> Vec<u8> {
-    // version=0, flags=0x020000 (default-base-is-moof)
-    let mut body = vec![0u8, 0x02, 0x00, 0x00];
-    body.extend_from_slice(&track_id.to_be_bytes());
-    make_full_box(b"tfhd", &body)
-}
-
-/// tfdt (Track Fragment Decode Time) — version 1 for 64-bit time.
-fn build_tfdt(base_media_decode_time: u64) -> Vec<u8> {
-    let mut body = Vec::new();
-    // version=1, flags=0
-    body.extend_from_slice(&[1, 0, 0, 0]);
-    body.extend_from_slice(&base_media_decode_time.to_be_bytes());
-    make_full_box(b"tfdt", &body)
-}
-
-/// trun (Track Fragment Run).
-///
-/// Flags: 0x000001 (data_offset_present)
-///      | 0x000100 (sample_duration_present)
-///      | 0x000200 (sample_size_present)
-///      | 0x000400 (sample_flags_present)
-///      | 0x000800 (sample_composition_time_offsets_present)
-fn build_trun(samples: &[FragmentSample], data_offset: u32) -> Vec<u8> {
-    // Determine if we need composition time offsets
-    let has_cts = samples.iter().any(|s| s.cts_offset != 0);
-
-    let mut flags: u32 = 0x000001 // data_offset_present
-        | 0x000100  // sample_duration_present
-        | 0x000200  // sample_size_present
-        | 0x000400; // sample_flags_present
-    if has_cts {
-        flags |= 0x000800; // sample_composition_time_offsets_present
-    }
-
-    let mut body = Vec::new();
-    // version=0 (version=1 needed for signed CTS offsets, but we use 0 for compatibility)
-    let version: u8 = if has_cts { 1 } else { 0 };
-    body.push(version);
-    body.push((flags >> 16) as u8);
-    body.push((flags >> 8) as u8);
-    body.push(flags as u8);
-
-    // sample_count
-    body.extend_from_slice(&(samples.len() as u32).to_be_bytes());
-    // data_offset (signed i32)
-    body.extend_from_slice(&(data_offset as i32).to_be_bytes());
-
-    // Per-sample entries
-    for (i, sample) in samples.iter().enumerate() {
-        // sample_duration: delta to next sample, or repeat last
-        let duration = if i + 1 < samples.len() {
-            (samples[i + 1].dts_ticks - sample.dts_ticks) as u32
-        } else if i > 0 {
-            (sample.dts_ticks - samples[i - 1].dts_ticks) as u32
-        } else {
-            1 // single sample — use 1 as fallback duration
-        };
-        body.extend_from_slice(&duration.to_be_bytes());
-
-        // sample_size
-        body.extend_from_slice(&(sample.data.len() as u32).to_be_bytes());
-
-        // sample_flags
-        let flags = if sample.is_keyframe {
-            0x02000000u32 // sample_depends_on=2 (does not depend on others)
-        } else {
-            0x01010000u32 // sample_depends_on=1 (depends on others), sample_is_non_sync=1
-        };
-        body.extend_from_slice(&flags.to_be_bytes());
-
-        // sample_composition_time_offset (if present)
-        if has_cts {
-            body.extend_from_slice(&(sample.cts_offset).to_be_bytes());
-        }
-    }
-
-    make_full_box(b"trun", &body)
 }
