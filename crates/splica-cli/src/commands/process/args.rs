@@ -12,7 +12,8 @@ use splica_mp4::Mp4Demuxer;
 use splica_webm::WebmDemuxer;
 
 use crate::commands::{
-    detect_format, AspectModeArg, AudioCodecArg, DetectedFormat, EncodePreset, VideoCodecArg,
+    detect_format, AspectModeArg, AudioCodecArg, DetectedFormat, EncodePreset, H264LevelArg,
+    H264ProfileArg, VideoCodecArg,
 };
 
 // ---------------------------------------------------------------------------
@@ -33,6 +34,8 @@ pub(crate) struct ProcessArgs<'a> {
     pub codec: Option<&'a VideoCodecArg>,
     pub audio_codec: Option<&'a AudioCodecArg>,
     pub audio_bitrate: Option<&'a str>,
+    pub h264_profile: Option<&'a H264ProfileArg>,
+    pub h264_level: Option<&'a H264LevelArg>,
     pub allow_color_conversion: bool,
 }
 
