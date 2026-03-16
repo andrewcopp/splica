@@ -52,6 +52,15 @@ pub(crate) enum VideoCodecArg {
     Av1,
 }
 
+/// CLI argument for output audio codec selection.
+#[derive(Clone, ValueEnum)]
+pub(crate) enum AudioCodecArg {
+    /// AAC (default for MP4).
+    Aac,
+    /// Opus (default for WebM and MKV).
+    Opus,
+}
+
 /// CLI argument for aspect ratio handling.
 #[derive(Clone, ValueEnum)]
 pub(crate) enum AspectModeArg {

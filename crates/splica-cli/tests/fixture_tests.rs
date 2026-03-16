@@ -742,6 +742,104 @@ fn test_that_process_with_codec_av1_to_mp4_produces_av1_output() {
 }
 
 // ---------------------------------------------------------------------------
+// --audio-codec flag
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_that_process_with_audio_codec_aac_and_mp4_output_succeeds() {
+    // GIVEN — an H.264 MP4 fixture
+
+    // WHEN — process with --audio-codec aac targeting MP4 output
+    let output_path = "/tmp/splica_test_audio_codec_aac.mp4";
+    let output = splica_binary()
+        .args([
+            "process",
+            "-i",
+            &fixture_path("bigbuckbunny_h264.mp4"),
+            "-o",
+            output_path,
+            "--audio-codec",
+            "aac",
+        ])
+        .output()
+        .unwrap();
+
+    // THEN — should succeed
+    assert!(
+        output.status.success(),
+        "process with --audio-codec aac to MP4 should succeed. stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let _ = std::fs::remove_file(output_path);
+}
+
+#[test]
+#[ignore] // rav1e is very slow in debug mode; run with `cargo test -- --ignored`
+fn test_that_process_with_audio_codec_opus_and_webm_output_succeeds() {
+    // GIVEN — an H.265 MP4 fixture (decodable via libde265)
+
+    // WHEN — process with --audio-codec opus targeting WebM output
+    let output_path = "/tmp/splica_test_audio_codec_opus.webm";
+    let output = splica_binary()
+        .args([
+            "process",
+            "-i",
+            &fixture_path("bigbuckbunny_h265.mp4"),
+            "-o",
+            output_path,
+            "--audio-codec",
+            "opus",
+            "--resize",
+            "320x180",
+        ])
+        .output()
+        .unwrap();
+
+    // THEN — should succeed
+    assert!(
+        output.status.success(),
+        "process with --audio-codec opus to WebM should succeed. stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let _ = std::fs::remove_file(output_path);
+}
+
+#[test]
+fn test_that_process_with_audio_codec_opus_and_mp4_output_fails() {
+    // GIVEN — an H.264 MP4 fixture
+
+    // WHEN — process with --audio-codec opus targeting MP4 output
+    let output_path = "/tmp/splica_test_audio_codec_opus_mp4.mp4";
+    let output = splica_binary()
+        .args([
+            "process",
+            "-i",
+            &fixture_path("bigbuckbunny_h264.mp4"),
+            "-o",
+            output_path,
+            "--audio-codec",
+            "opus",
+        ])
+        .output()
+        .unwrap();
+
+    // THEN — should fail with a clear error about Opus in MP4
+    assert!(
+        !output.status.success(),
+        "process with --audio-codec opus to MP4 should fail"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Opus") && stderr.contains("MP4"),
+        "expected error about Opus in MP4, got: {stderr}"
+    );
+
+    let _ = std::fs::remove_file(output_path);
+}
+
+// ---------------------------------------------------------------------------
 // Probe JSON contract (SPL-116)
 // ---------------------------------------------------------------------------
 

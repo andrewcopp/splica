@@ -6,7 +6,7 @@ use clap::{Parser, Subcommand};
 use miette::Result;
 
 use commands::process::ProcessArgs;
-use commands::{AspectModeArg, EncodePreset, OutputFormat, VideoCodecArg};
+use commands::{AspectModeArg, AudioCodecArg, EncodePreset, OutputFormat, VideoCodecArg};
 
 #[derive(Parser)]
 #[command(
@@ -87,6 +87,11 @@ enum Commands {
         /// Default: auto-select based on output container.
         #[arg(long)]
         codec: Option<VideoCodecArg>,
+
+        /// Output audio codec (e.g., "aac", "opus").
+        /// Default: auto-select based on output container (MP4→AAC, WebM/MKV→Opus).
+        #[arg(long)]
+        audio_codec: Option<AudioCodecArg>,
 
         /// Allow re-encoding when the input has non-standard color space metadata
         /// (e.g., HDR/BT.2020). Without this flag, splica will error rather than
@@ -242,6 +247,7 @@ fn main() -> Result<()> {
             crop,
             volume,
             codec,
+            audio_codec,
             allow_color_conversion,
             format,
         } => commands::process::process(
@@ -257,6 +263,7 @@ fn main() -> Result<()> {
                 crop: crop.as_deref(),
                 volume: volume.as_deref(),
                 codec: codec.as_ref(),
+                audio_codec: audio_codec.as_ref(),
                 allow_color_conversion,
             },
             &format,
@@ -298,6 +305,7 @@ fn main() -> Result<()> {
                     crop: None,
                     volume: None,
                     codec: None,
+                    audio_codec: None,
                     allow_color_conversion: false,
                 },
                 &OutputFormat::Text,
@@ -327,6 +335,7 @@ fn main() -> Result<()> {
                     crop: None,
                     volume: None,
                     codec: None,
+                    audio_codec: None,
                     allow_color_conversion: false,
                 },
                 &format,
