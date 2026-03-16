@@ -159,8 +159,7 @@ impl ContainerFormat {
     /// Returns true if splica currently supports writing this format.
     pub fn is_writable(self) -> bool {
         match self {
-            Self::Mp4 | Self::WebM => true,
-            Self::Mkv => true,
+            Self::Mp4 | Self::WebM | Self::Mkv => true,
         }
     }
 }

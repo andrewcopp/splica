@@ -221,6 +221,42 @@ fn test_that_deprecated_convert_still_works() {
     let _ = std::fs::remove_file(&output_path);
 }
 
+#[test]
+fn test_that_deprecated_transcode_still_works() {
+    let dir = std::env::temp_dir().join("splica_test");
+    std::fs::create_dir_all(&dir).unwrap();
+    let input_path = dir.join("deprecated_transcode_input.mp4");
+    let output_path = dir.join("deprecated_transcode_output.mp4");
+
+    let source_mp4 = build_muxed_test_mp4();
+    std::fs::write(&input_path, &source_mp4).unwrap();
+
+    let output = splica_binary()
+        .args([
+            "transcode",
+            "-i",
+            input_path.to_str().unwrap(),
+            "-o",
+            output_path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "deprecated transcode should still work. stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("deprecated"),
+        "should show deprecation warning. stderr: {stderr}"
+    );
+
+    let _ = std::fs::remove_file(&input_path);
+    let _ = std::fs::remove_file(&output_path);
+}
+
 /// Creates a valid MP4 by building a source, demuxing it, and remuxing it.
 /// This exercises the full muxer pipeline to produce a file the demuxer can read.
 fn build_muxed_test_mp4() -> Vec<u8> {

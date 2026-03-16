@@ -31,7 +31,6 @@ pub struct WebmDemuxer<R> {
     /// Current cluster timestamp in scaled ticks.
     cluster_timestamp: u64,
     /// File offset where Clusters begin (after Tracks).
-    #[allow(dead_code)]
     cluster_start: u64,
     /// Current read position in the file.
     position: u64,
