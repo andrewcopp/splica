@@ -13,4 +13,6 @@ pub use decoder::{H265Decoder, H265DecoderConfig};
 #[cfg(feature = "codec-h265-enc")]
 mod encoder;
 #[cfg(feature = "codec-h265-enc")]
+mod sps;
+#[cfg(feature = "codec-h265-enc")]
 pub use encoder::{H265Encoder, H265EncoderBuilder, H265EncoderConfig};
