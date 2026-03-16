@@ -10,9 +10,45 @@ description = "WASM bindings for the splica media processing library"
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[features]
+default = []
+
+# Individual codec flags (forwarded to splica-codec)
+decode-h264 = ["dep:splica-codec", "splica-codec/decode-h264"]
+encode-h264 = ["dep:splica-codec", "splica-codec/encode-h264"]
+decode-h265 = ["dep:splica-codec", "splica-codec/decode-h265"]
+encode-h265 = ["dep:splica-codec", "splica-codec/encode-h265"]
+decode-av1 = ["dep:splica-codec", "splica-codec/decode-av1"]
+encode-av1 = ["dep:splica-codec", "splica-codec/encode-av1"]
+decode-aac = ["dep:splica-codec", "splica-codec/decode-aac"]
+encode-aac = ["dep:splica-codec", "splica-codec/encode-aac"]
+decode-opus = ["dep:splica-codec", "splica-codec/decode-opus"]
+encode-opus = ["dep:splica-codec", "splica-codec/encode-opus"]
+
+# Convenience aliases (match splica-codec naming)
+codec-h264 = ["decode-h264", "encode-h264"]
+codec-h265 = ["decode-h265"]
+codec-h265-enc = ["encode-h265"]
+codec-av1 = ["decode-av1", "encode-av1"]
+codec-aac = ["decode-aac"]
+codec-aac-enc = ["encode-aac"]
+codec-opus = ["decode-opus", "encode-opus"]
+
+# Meta feature
+all-codecs = [
+    "decode-h264", "encode-h264",
+    "decode-h265", "encode-h265",
+    "decode-av1", "encode-av1",
+    "decode-aac", "encode-aac",
+    "decode-opus", "encode-opus",
+]
+
 [dependencies]
 splica-core = { workspace = true, features = ["serde", "wasm"] }
+splica-codec = { workspace = true, optional = true, default-features = false }
 splica-mkv = { workspace = true, features = ["wasm"] }
 splica-mp4 = { workspace = true, features = ["wasm"] }
 splica-webm = { workspace = true, features = ["wasm"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
 wasm-bindgen = "0.2"

@@ -1575,12 +1575,16 @@ version = "0.1.0"
 dependencies = [
  "bytes",
  "splica-core",
+ "splica-mp4",
 ]
 
 [[package]]
 name = "splica-wasm"
 version = "0.1.0"
 dependencies = [
+ "serde",
+ "serde_json",
+ "splica-codec",
  "splica-core",
  "splica-mkv",
  "splica-mp4",
