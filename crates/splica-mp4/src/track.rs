@@ -11,8 +11,9 @@ use crate::sample_table::SampleTable;
 
 /// Internal representation of an MP4 track.
 #[derive(Debug)]
-#[allow(dead_code)]
 pub(crate) struct Mp4Track {
+    /// Retained: needed for muxer track-mapping and multi-track selection.
+    #[allow(dead_code)]
     pub track_id: u32,
     pub handler_type: HandlerType,
     pub timescale: u32,
