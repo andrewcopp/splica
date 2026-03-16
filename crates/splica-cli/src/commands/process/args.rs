@@ -81,25 +81,16 @@ pub(super) struct DemuxerWithConfigs {
 /// Parses a bitrate string like "2M", "1500k", or "1000000" into bits per second.
 pub(super) fn parse_bitrate(s: &str) -> Result<u32> {
     let s = s.trim();
-    if let Some(prefix) = s.strip_suffix('M') {
+    let last = s.bytes().last().map(|b| b.to_ascii_uppercase());
+    if let Some(b'M') = last {
+        let prefix = &s[..s.len() - 1];
         let val: f64 = prefix
             .parse()
             .into_diagnostic()
             .wrap_err_with(|| format!("invalid bitrate: '{s}'"))?;
         Ok((val * 1_000_000.0) as u32)
-    } else if let Some(prefix) = s.strip_suffix('m') {
-        let val: f64 = prefix
-            .parse()
-            .into_diagnostic()
-            .wrap_err_with(|| format!("invalid bitrate: '{s}'"))?;
-        Ok((val * 1_000_000.0) as u32)
-    } else if let Some(prefix) = s.strip_suffix('k') {
-        let val: f64 = prefix
-            .parse()
-            .into_diagnostic()
-            .wrap_err_with(|| format!("invalid bitrate: '{s}'"))?;
-        Ok((val * 1_000.0) as u32)
-    } else if let Some(prefix) = s.strip_suffix('K') {
+    } else if let Some(b'K') = last {
+        let prefix = &s[..s.len() - 1];
         let val: f64 = prefix
             .parse()
             .into_diagnostic()
