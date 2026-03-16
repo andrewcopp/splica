@@ -226,19 +226,19 @@ impl Pipeline {
         let tracks = self.demuxer.tracks().to_vec();
         let mut input_to_output: HashMap<TrackIndex, TrackIndex> = HashMap::new();
         for track_info in &tracks {
-            let mut info = if let Some(codec) = self.output_codecs.get(&track_info.index) {
+            let info = {
                 let mut overridden = track_info.clone();
-                overridden.codec = codec.clone();
-                overridden
-            } else {
-                track_info.clone()
-            };
-            if let Some(&(w, h)) = self.output_dimensions.get(&track_info.index) {
-                if let Some(ref mut video) = info.video {
-                    video.width = w;
-                    video.height = h;
+                if let Some(codec) = self.output_codecs.get(&track_info.index) {
+                    overridden.codec = codec.clone();
                 }
-            }
+                if let Some(&(w, h)) = self.output_dimensions.get(&track_info.index) {
+                    if let Some(ref mut video) = overridden.video {
+                        video.width = w;
+                        video.height = h;
+                    }
+                }
+                overridden
+            };
             let output_idx = self.muxer.add_track(&info)?;
             input_to_output.insert(track_info.index, output_idx);
         }

@@ -135,6 +135,11 @@ pub(super) fn wire_video_encoder(
         builder = builder.with_filter(vtc.track_index, scale_filter);
     }
 
+    // Tell the muxer about post-resize dimensions for correct container metadata
+    if args.resize.is_some() {
+        builder = builder.with_output_dimensions(vtc.track_index, enc_w, enc_h);
+    }
+
     // Crop filter (applied after scale)
     if let Some(crop_str) = args.crop {
         let (cx, cy, cw, ch) = parse_crop(crop_str)?;

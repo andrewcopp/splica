@@ -13,38 +13,43 @@ Key architectural decisions confirmed:
 
 ## Known Tech Debt
 
-### Active 500-line trigger files (debt sprint is overdue)
-- **`splica-core/src/error.rs` — 631 non-test lines** — NEW Sprint 25. Extract serde impls to `error/serde_impls.rs`.
-- **`splica-mp4/src/fmp4_muxer.rs` — 540 non-test lines** — carried from Sprint 24. Extract box helpers to `fmp4_box_builders.rs`.
+### No active 500-line trigger files (Sprint 26 debt sprint cleared both; Sprint 27 no production code changed)
 
-### P1 items (must fix; some past 2-sprint deadline)
-- **H.264 flush zero PTS** (`h264/decoder.rs:297`) — silent wrong output on B-frames. 3 sprints deferred. Add `last_emitted_dts` field, increment in flush loop.
-- **`open_webm_configs` drops VP9/AV1 video tracks** (`process/args.rs:326`) — 3 sprints deferred. Wire like `open_mkv_configs` using `webm.codec_private()`.
-- **Audio encoder bitrate hardcoded 128 kbps** (`wiring.rs:197,208`) — 5 sprints deferred. Add `--audio-bitrate` flag.
-- **`splica-webm/src/demuxer/parsing.rs` has no tests** — 455 lines pure parsing, untested. 3 sprints deferred.
-- **No subtitle passthrough integration tests** — SPL-152 shipped in Sprint 25 with zero binary-level test coverage.
+### P0 items (auto-schedule — silent wrong output)
+- **Transcode frame rate broken** — encoders use `poc` as PTS ticks in encoder timebase, but encoders receive frames with input-native ticks. H.265→H.264 transcode produces 2.67fps; AV1→H.264 produces 98fps. Root: `h265/encoder.rs:274-281`, `av1/encoder.rs` analogous. Medium effort. Discovered SPL-184.
+- **Post-transcode muxer has wrong resolution metadata** — `Mp4Muxer::add_track` stores original `TrackInfo` dimensions; after resize re-encode the muxed tkhd/stsd report the pre-scale resolution. Root: `mp4/src/muxer.rs:367-408` / `reencode.rs` wire path. Medium effort. Discovered encode matrix test.
+
+### P1 items (open)
+- **AV1 encoder flush: bare `unwrap()`** (`av1/encoder.rs:335,351`) — Sprint 26. Replace with `.expect()` + comment. Small effort. Carry sprint 2/2 — must schedule next sprint.
 
 ### P2 items (carry limit watch)
-- **`#[allow(dead_code)]` on `Mp4Track` struct** (`track.rs:14`) — 3 sprints; field-level audit needed.
-- **`ContainerFormat::is_writable` redundant arm** (`media/mod.rs:160`) — both arms return true.
-- **`parse_bitrate` copy-paste for M/m and k/K** (`args.rs:83-111`) — normalize suffix before branching.
-- **`cluster_start` dead field suppressed** (`webm/demuxer/mod.rs:34`) — delete or promote.
-- **AV1 encoder speed hardcoded to 6** (`wiring.rs:73`) — not connected to `--preset`. 3 sprints deferred.
-- **Deprecated `convert`/`transcode` subcommands untested** (`main.rs:185-343`).
-- **H.264 flush zero PTS** (also `.unwrap()` on infallible `Timestamp::new(0,1)` — cosmetic but wrong).
-- **`detect_ebml_doctype` hand-rolled byte scanner** (`format_detect.rs`) — untested. 4 sprints deferred.
+- **`ContainerFormat::is_writable` redundant arm** (`media/mod.rs:160`) — both arms return true. Carry 2+ sprints.
+- **`parse_bitrate` copy-paste for M/m and k/K** (`args.rs:83-111`) — normalize suffix before branching. Carry 2+ sprints.
+- **`cluster_start` dead field suppressed** (`webm/demuxer/mod.rs:34`) — delete or promote. Carry 2+ sprints.
+- **Deprecated `convert`/`transcode` subcommands untested** (`main.rs:185-343`). Carry 2+ sprints.
+- **`detect_ebml_doctype` hand-rolled byte scanner** (`format_detect.rs`) — untested. 6 sprints deferred. ESCALATE.
+
+### Watch list (approaching 500 lines — no change Sprint 27, no production code modified)
+- `splica-mp4/src/demuxer.rs` — ~440 non-test lines
+- `splica-codec/src/h265/encoder.rs` — ~438 non-test lines
+- `splica-webm/src/demuxer/mod.rs` — ~418 non-test lines
+- `splica-mp4/src/muxer.rs` — ~418 non-test lines
+- `splica-webm/src/muxer.rs` — ~417 non-test lines
 
 ## Sprint Cadence — Tech Debt Process
 
-**3:1 model with trigger override.** Sprint 26 MUST be a debt sprint — trigger active on 2 files, cadence 2 sprints overdue.
+**3:1 model with trigger override.**
 
 - Debt sprint fires: any file crosses 500 non-test lines OR 3 feature sprints elapsed.
 - P0 items auto-schedule regardless of cadence.
 - Medium items cannot be carried more than 2 sprints without explicit priority call.
+- Sprint 27 is feature sprint 1 of the new cycle. Next mandatory debt sprint: Sprint 30 (or earlier if trigger fires).
 
 ## Quality Trends
 
 - Sprint 20 (2026-03-14): Debt sprint. Strong cleanup. Quality high going into Sprint 21.
 - Sprint 21 (2026-03-14): Feature sprint 1. Minor changes; muxer.rs/demuxer.rs crossed 500 lines (trigger active).
 - Sprints 22-24: Feature sprints. fmp4_muxer.rs crossed 500 lines (trigger not addressed).
-- Sprint 25 (2026-03-15): Feature sprint. Subtitle passthrough (SPL-152), --audio-codec flag, post-run summary (SPL-154), --max-fps, --allow-color-conversion. Refactors: wiring.rs extracted, h265/sps.rs extracted, media.rs split to color.rs+frame.rs. error.rs now 631 non-test lines (new trigger). Debt sprint is now 2 sprints overdue. Sprint 26 must be debt.
+- Sprint 25 (2026-03-15): Feature sprint. Subtitle passthrough (SPL-152), --audio-codec flag, post-run summary (SPL-154), --max-fps, --allow-color-conversion. error.rs now 631 non-test lines (new trigger). Debt sprint 2 sprints overdue.
+- Sprint 26 (2026-03-15): Debt sprint. Cleared all P1 items and both 500-line triggers. One new low-severity issue introduced (AV1 unwrap). Five container/encoder files now in 416-439 line watch range. Trigger acceptance criterion met. Quality trend: positive.
+- Sprint 27 (2026-03-16): Test-only sprint (SPL-182 adversarial fixtures, SPL-183 encode matrix, SPL-184 frame rate passthrough). No production code changed. No trigger fires. Two P0 correctness bugs discovered: transcode frame rate is completely wrong (PTS reconstruction broken in H265/AV1 encoders), and post-resize muxer metadata reports wrong resolution. AV1 flush unwrap now at carry limit (sprint 2/2). `detect_ebml_doctype` at 6 sprints deferred — escalation warranted. Quality trend: stable structurally; correctness surface area increased with test coverage.

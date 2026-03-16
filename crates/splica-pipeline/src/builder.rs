@@ -216,9 +216,10 @@ impl PipelineBuilder {
 
     /// Overrides the video dimensions reported to the muxer for a specific track.
     ///
-    /// When a filter (e.g., ScaleFilter) changes the frame dimensions, the muxer
-    /// needs the output dimensions to write correct container metadata. Without
-    /// this, the muxer would use the original input dimensions.
+    /// When a resize filter changes the frame dimensions, the muxer needs to
+    /// know the output dimensions to write correct container metadata (e.g.,
+    /// tkhd/stsd in MP4). This override is applied to the track info before
+    /// calling `Muxer::add_track`.
     pub fn with_output_dimensions(mut self, track: TrackIndex, width: u32, height: u32) -> Self {
         self.output_dimensions.insert(track, (width, height));
         self

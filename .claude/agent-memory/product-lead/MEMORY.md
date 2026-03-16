@@ -38,25 +38,26 @@ Exit code convention: 0=success, 1=bad input (no retry), 2=internal error (retry
 
 Any crate that adds FFI must simultaneously add a feature flag that excludes it, and CI must verify the pure-Rust build for wasm32-unknown-unknown. Each codec has its own independent flag (`codec-h264`, `codec-h265`, `codec-aac`, `codec-opus`, `codec-av1` — Sprint 12) — they are not folded into a single `native-codecs` umbrella.
 
-## Codebase State as of Sprint 21 complete / Sprint 22 active (2026-03-14)
+## Codebase State as of Sprint 27 complete / Sprint 28 planning (2026-03-16)
 
-Sprints 1–21 complete. Full codec matrix: H.264 (dec+enc), H.265 (dec+enc via kvazaar), AV1 (dec+enc), AAC (dec+enc), Opus (dec+enc). Containers: MP4 (demux+mux), WebM (demux+mux), MKV (demux+mux). Filters: Scale, Volume, Crop. WASM bindings: WasmMp4Demuxer + WasmWebmDemuxer + WasmMkvDemuxer — all three with full packet/config/seek parity. Structured JSON output, NDJSON progress, exit code contract, pre-flight validation. `splica migrate` subcommand. Benchmark demos shipped (8/8 Sprint 21 issues). SPL-142 (--volume help text) done Sprint 21.
+Sprints 1–27 complete. Full codec matrix: H.264 (dec+enc), H.265 (dec+enc via kvazaar), AV1 (dec+enc), AAC (dec+enc), Opus (dec+enc). Containers: MP4 (demux+mux), WebM (demux+mux), MKV (demux+mux). Filters: Scale, Volume, Crop. WASM: WasmMp4Demuxer + WasmWebmDemuxer + WasmMkvDemuxer — full packet/config/seek parity. CLI: process, probe, trim, join, extract-audio, migrate. Exit code contract in --help. Subtitle passthrough. Post-run summary. --audio-codec, --audio-bitrate flags. Per-direction feature flags.
 
-**Sprint 22 scope (debt sprint — mandatory 3:1 cadence):**
-- SPL-120 (Urgent): WasmMkvDemuxer audio duration = -1.0 hardcoded
-- SPL-143 (High): Eliminate unwrap() from production muxer code
-- SPL-144 (High): Split mp4/muxer.rs 552→430 lines (→box_builders.rs)
-- SPL-145 (High): Split mp4/demuxer.rs 527→450 lines (→track_parsing.rs)
-- SPL-124 (Medium): Color space passthrough tests
-- SPL-126 (Medium): Frame rate/sample rate passthrough tests
-- SPL-146 (Medium): Consolidate WASM codec string helpers into splica-core
-- SPL-147 (Medium): Unit tests for CLI arg-parsing helpers (parse_bitrate, parse_crop, parse_volume, parse_resize)
-- SPL-148 (Medium): Replace recursive read_next_cluster with iterative loop
-- SPL-125: Closed as duplicate of SPL-142 (done Sprint 21)
+**Sprint 27 delivered (feature sprint — credibility artifacts):**
+- SPL-182: Adversarial fixture library — 11 tests, structured errors for bad input
+- SPL-183: Encode matrix — 23 tests, probe assertions across MP4/WebM/MKV × H.264/H.265/AV1
+- SPL-184: Frame rate/sample rate passthrough tests — DISCOVERED P0 bug (see below)
 
-**Priority call required before Sprint 23:** SPL-121 (--audio-codec flag) and audio bitrate hardcoding carried 4+ sprints as medium — needs explicit scoping decision.
+**P0 discovered by Sprint 27 tests (auto-schedules to Sprint 28):**
+- H.265 transcode: 30fps input → 2.67fps output (silent, exits 0)
+- AV1 transcode: 30fps input → 98fps output, duration 10s → 111s (silent, exits 0)
+- Root cause: transcode decode-encode roundtrip mangling timestamps in pipeline layer
 
-**Still open in backlog (post-v0.1):** encode in WASM, EBU R128, migrate filter_complex/multi-input, SPL-122 (WASM container detection), SPL-123 (exit code contract documentation).
+**Red cells from encode matrix (Sprint 28 triage needed):**
+- Probe reports pre-scale resolution after ScaleFilter — affects Jordan/Elena QC workflows
+- VP9 decode blocks re-encode (missing feature, needs explicit error not silent failure)
+- WebM/AV1 output blocked by rav1e speed in debug builds — CI reliability gap
+
+**Still open in backlog:** SPL-122 (WASM container detection — high leverage for Alex), SPL-123 (exit code contract as versioned artifact), SPL-169 (probe JSON codec parameter expansion), SPL-170 (WASM H.264 frame decode), SPL-145/146 (SPL-146 may be duplicate of done SPL-152 — verify with Dana).
 
 ## Key Decision: trim --format json = single-shot JSON, not NDJSON (2026-03-11)
 
@@ -198,9 +199,16 @@ Rule: report written at sprint close, before next sprint planning. Never edited 
 
 **x265 is GPL-2.0** — incompatible with splica's Apache-2.0 license. SPL-87's original description said "LGPL — same as libde265" — this was wrong. kvazaar (University of Tampere) is BSD-3-Clause, fully compatible. Competitive quality at fast-to-medium presets. No existing Rust bindings — requires creating `kvazaar-sys` (bindgen) as a prerequisite. Feature flag: `codec-h265-enc` (separate from `codec-h265` which gates libde265-rs decode — they are different C libraries). VUI color support confirmed in kvazaar API.
 
-## Focus Group Round 15 — Post-Sprint 25 (2026-03-15) — see focus-group-round-15.md
+## Focus Group Rounds — see focus-group-rounds.md for Rounds 15–17 detail
 
-P0: (1) Preset re-encode silently downsamps frame rate to 30fps for fast/medium presets — fix by defaulting to source frame rate unless --max-fps set. (2) Preset re-encode uses content-blind bitrate default (no --crf/--bitrate) — fix by defaulting to CRF. High: (3) trim + join have no liveness signal; join result missing duration_seconds. (4) WASM encode path absent — rav1e is already pure Rust, prerequisite met. Medium: (5) Custom I/O path for PipelineBuilder undocumented.
+Round 17 (Post-Sprint 27, 2026-03-16) key findings:
+- P0 transcode timestamp bug auto-schedules to Sprint 28 (H.265: 30fps→2.67fps, AV1: 30fps→98fps)
+- Probe-after-scale resolution bug is a QC correctness failure for Jordan and Elena — High priority Sprint 28
+- SPL-123 (exit code contract as versioned artifact) must enter Sprint 28 — Priya's root need unserved
+- VP9 re-encode gap needs explicit error, not silent failure — ffmpeg anti-pattern to fix
+- WebM/AV1/rav1e-in-debug: mark those matrix cells #[ignore] with explanation until resolved
+- SPL-122 (WASM container detection) and SPL-170 (WASM H.264 frame decode) deferred to Sprint 29 — don't mix correctness triage with feature work
+- Sprint 28 thesis: turn Sprint 27's red cells green. When the matrix is clean, we have a credible "90% case" claim.
 
 ## Sprint 21: Benchmark Demos — COMPLETE (2026-03-14)
 
