@@ -126,8 +126,7 @@ fn process_inner(args: &ProcessArgs<'_>, json_mode: bool) -> Result<TranscodeOut
         || args.resize.is_some()
         || args.crop.is_some()
         || args.volume.is_some()
-        || args.codec.is_some()
-        || args.audio_codec.is_some();
+        || args.codec.is_some();
 
     if !user_requested_reencode {
         // Check if stream copy is possible (all codecs compatible, no audio transcode needed)
