@@ -38,7 +38,7 @@ Exit code convention: 0=success, 1=bad input (no retry), 2=internal error (retry
 
 Any crate that adds FFI must simultaneously add a feature flag that excludes it, and CI must verify the pure-Rust build for wasm32-unknown-unknown. Each codec has its own independent flag (`codec-h264`, `codec-h265`, `codec-aac`, `codec-opus`, `codec-av1` — Sprint 12) — they are not folded into a single `native-codecs` umbrella.
 
-## Codebase State as of Sprint 28 complete / Sprint 29 planning (2026-03-16)
+## Codebase State as of Sprint 31 complete / Sprint 32 planning (2026-03-16)
 
 Sprints 1–28 complete. Full codec matrix: H.264 (dec+enc), H.265 (dec+enc via kvazaar), AV1 (dec+enc), AAC (dec+enc), Opus (dec+enc). Containers: MP4 (demux+mux), WebM (demux+mux), MKV (demux+mux). Filters: Scale, Volume, Crop. WASM: WasmMp4Demuxer + WasmWebmDemuxer + WasmMkvDemuxer — full packet/config/seek parity. CLI: process, probe, trim, join, extract-audio, migrate. Exit code contract in --help. Subtitle passthrough. Post-run summary. --audio-codec, --audio-bitrate flags. Per-direction feature flags.
 
@@ -140,14 +140,14 @@ Sprint reports are product-thesis instruments, not delivery logs. Two formats (f
 
 **x265 is GPL-2.0** — incompatible with splica's Apache-2.0 license. SPL-87's original description said "LGPL — same as libde265" — this was wrong. kvazaar (University of Tampere) is BSD-3-Clause, fully compatible. Competitive quality at fast-to-medium presets. No existing Rust bindings — requires creating `kvazaar-sys` (bindgen) as a prerequisite. Feature flag: `codec-h265-enc` (separate from `codec-h265` which gates libde265-rs decode — they are different C libraries). VUI color support confirmed in kvazaar API.
 
-## Focus Group Rounds — see focus-group-rounds.md for Rounds 15–18 detail
+## Focus Group Rounds — see focus-group-rounds.md for Rounds 15–19 detail
 
-Round 18 (Post-Sprint 28, 2026-03-16) key findings:
-- Both P0s fixed: PTS/frame rate (H.265 + AV1 transcode) and resize metadata
-- Sprint 29 top 3: SPL-122 (WASM container detection), SPL-121 (--audio-codec flag), SPL-123 (exit code contract versioned)
-- SPL-169 (probe JSON codec params) deferred post-debt — additive, no urgency
-- SPL-170 (WASM H.264 frame decode) still deferred — no pull signal from real JS callers
-- Sprint 29 is the LAST feature sprint before mandatory debt sprint
+Round 19 (Post-Sprint 31, 2026-03-16) key findings:
+- All 5 primary personas at Ready. Sprint 32 is the LAST feature sprint before mandatory debt sprint (Sprint 33).
+- Sprint 32 top 6: (1) WASM lightweight container probe, (2) color metadata passthrough on re-encode, (3) error_kind stability contract, (4) input path in error JSON, (5) WASM codec feature-flag builds, (6) in-memory reader docs
+- Color metadata passthrough is functionally P0-adjacent — strips VUI on every re-encode, delivery pipeline blocker for Elena
+- Marcus and Alex independently converged on same WASM probe ask — strong signal
+- Priya and Ingrid share the error_kind versioning gap — one task closes both
 
 ## Sprint 21: Benchmark Demos — COMPLETE (2026-03-14)
 

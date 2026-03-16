@@ -49,6 +49,34 @@ Sprint 27 delivered: adversarial fixtures (11 tests), encode matrix (23 tests), 
 
 **Sprint 28 thesis:** Turn Sprint 27's red cells green. A clean matrix is the prerequisite for the credibility claim that splica handles the 90% case correctly — and the prerequisite for everything after (reliability comparison, adoption initiatives, benchmark demos).
 
+## Round 19 — Post-Sprint 31 (2026-03-16)
+
+All 5 primary personas at Ready. Sprint 32 is the last feature sprint before mandatory debt sprint (Sprint 33).
+
+**Primary persona signals:**
+- Jordan: needs input file path in structured error output — correlating batch failures requires parsing the message field today (fragile)
+- Priya: `error_kind` taxonomy is undocumented/unversioned — exit code contract is half-published; `error_kind` is the other half
+- Marcus: WASM gap between `detect_container` and "what's in this container" — needs lightweight header probe without full demuxer construction
+- Elena: color metadata (`color_primaries`, `transfer_characteristics`, `matrix_coefficients`) stripped on re-encode — systematic correctness gap, delivery pipeline failure
+- Alex: same lightweight WASM probe ask as Marcus (converged independently), plus WASM codec feature-flag builds to reduce bundle size
+
+**Stress-test persona pulse:**
+- Ravi: still not adopting — needs memory profiling methodology; post-debt
+- Ingrid: moved closer (hash + semver done); remaining gap = `error_kind` versioning (same as Priya)
+- Dev: iOS spike done; needs in-memory reader pattern documented
+- Mei: LUFS still out of scope
+- Tobias: explicitly out of scope
+
+**Sprint 32 top priorities:**
+1. WASM lightweight container probe — WasmProbeResult (Marcus + Alex, natural successor to detect_container)
+2. Color metadata passthrough on H.264/H.265 re-encode (Elena, correctness, delivery pipeline blocker)
+3. `error_kind` stability contract — versioned JSON error taxonomy (Priya + Ingrid)
+4. Input file path in structured error output (Jordan + Priya)
+5. WASM codec feature-flag builds (Alex + Marcus)
+6. In-memory reader pattern documentation + API verification (Dev + Marcus)
+
+**Key risk flag:** Sprint 33 is a debt sprint. Don't inflate any file past 500 lines in Sprint 32 — especially `splica-wasm/src/lib.rs`. Split proactively.
+
 ## Round 18 — Post-Sprint 28 (2026-03-16)
 
 Sprint 28 delivered: both P0s fixed (PTS/frame rate + resize metadata), VP9 clear error, AV1 unwrap cleanup, EBML doctype tests. Sprint 28 is the 2nd of 3 feature sprints before mandatory debt sprint.
