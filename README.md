@@ -169,9 +169,16 @@ splica uses structured exit codes for automation. See [docs/exit-codes.md](docs/
 | 2 | Internal error (encoder/muxer/I/O failure) | Yes |
 | 3 | Resource exhausted (memory, file handles, budget limits) | Yes |
 
+## Documentation
+
+- [Scope](docs/scope.md) -- what splica is and is not, and when to use ffmpeg instead
+- [Exit Codes](docs/exit-codes.md) -- exit code contract for automation consumers
+- [Stability Policy](docs/STABILITY.md) -- semver guarantees and what counts as a breaking change
+- [API Guide](docs/api-guide.md) -- using splica as a Rust library
+
 ## Project Status
 
-splica is in early development. The API is unstable and will change.
+splica is in early development. The API is unstable and will change. See the [stability policy](docs/STABILITY.md) for details on what will be guaranteed after 1.0.
 
 ## License
 
