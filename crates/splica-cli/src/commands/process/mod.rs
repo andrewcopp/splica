@@ -81,6 +81,7 @@ pub(crate) fn process(args: &ProcessArgs<'_>, format: &OutputFormat) -> Result<(
                     event_type: "error",
                     error_kind: error_kind.to_string(),
                     message: format!("{e}"),
+                    input: Some(args.input.display().to_string()),
                 };
                 println!("{}", serde_json::to_string(&error_json).unwrap());
                 std::process::exit(code);

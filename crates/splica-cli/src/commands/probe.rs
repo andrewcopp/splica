@@ -70,6 +70,7 @@ pub(crate) fn probe(file: &Path, format: &OutputFormat) -> Result<()> {
                 event_type: "error",
                 error_kind: error_kind.to_string(),
                 message: format!("{e}"),
+                input: Some(file.display().to_string()),
             };
             println!("{}", serde_json::to_string_pretty(&error_json).unwrap());
             std::process::exit(code);

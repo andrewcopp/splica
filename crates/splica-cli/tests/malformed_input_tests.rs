@@ -79,6 +79,11 @@ fn test_that_probe_json_of_zero_byte_file_reports_bad_input() {
         serde_json::from_str(&stdout).expect("error output should be valid JSON");
     assert_eq!(json["type"], "error");
     assert_eq!(json["error_kind"], "bad_input");
+    assert_eq!(
+        json["input"].as_str().unwrap(),
+        path.to_str().unwrap(),
+        "error JSON should include the input file path"
+    );
 
     let _ = std::fs::remove_file(&path);
 }
@@ -183,6 +188,11 @@ fn test_that_process_json_of_corrupt_header_reports_bad_input() {
         serde_json::from_str(&stdout).expect("error output should be valid JSON");
     assert_eq!(json["type"], "error");
     assert_eq!(json["error_kind"], "bad_input");
+    assert_eq!(
+        json["input"].as_str().unwrap(),
+        input.to_str().unwrap(),
+        "process error JSON should include the input file path"
+    );
 
     let _ = std::fs::remove_file(&input);
     let _ = std::fs::remove_file(&output_path);
