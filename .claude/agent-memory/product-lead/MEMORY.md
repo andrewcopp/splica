@@ -129,70 +129,12 @@ Requires decode-and-re-encode to keyframe boundary. Not in 90% use case for spli
 
 Dana rated --volume silent no-op (T1) and VP9 hardcoded codec string (T4) as "medium." Both were reclassified to P0 for Sprint 10. Rule: any output that is silently wrong — regardless of how limited the scenario — is P0, not medium. A missing feature is medium. A feature that accepts user input and produces wrong output without warning is P0.
 
-## Notion Workspace Structure
+## Notion + Linear + Triage — see reference_workspace_tools.md for full detail
 
-Hub page: https://www.notion.so/31f1326e510281df9ce1cddebcb5c747
-
-```
-splica (hub)
-├── Product North Star
-├── Roadmap — phase-level only
-├── Decisions — database (data source ID: c4d6254c-f484-4605-9dfb-fabbdbb84b96)
-├── Personas
-├── Feedback Rounds — index; child pages per round
-│   ├── Round 1 through Round 8 (see prior entries)
-│   ├── Round 9 — Post-Sprint 8 (AAC/Opus Encode, WASM Decode API, process Command, Color Passthrough, Typed Errors)
-│   ├── Round 10 — Post-Sprint 9 (WebM WASM Packets, Structured Progress, VolumeFilter, Color Contract, Type-Safety Bundle)
-│   ├── Round 11 — Post-Sprint 10 (--volume Fix, VP9 Codec String, videoDecoderConfig Discrimination)
-│   ├── Round 12 — Post-Sprint 11 (H.265 Decode + Color Passthrough, NDJSON Error Events, trim --format json, WASM Seeking, Unsupported-Codec Errors) [index entry only; page not yet created]
-│   ├── Round 13 — Post-Sprint 19 (AV1 CLI Flag, WasmMkvDemuxer, JSON Contract, mod.rs Split) [page created 2026-03-11]
-│   └── Round 14 — Post-Sprint 20 Focus Group (Benchmark Demo Sprint Planning) [page created 2026-03-13]
-└── Retrospectives — index; child pages per sprint (Sprint 1–17 + template)
-    ├── Sprint Report Template (codifies feature + debt sprint formats)
-    ├── Sprint 12 Report — MKV write, QC output, ContainerFormat refactor
-    ├── Sprint 13 Report — AV1 decode, MKV demux, AV1 fixture
-    ├── Sprint 14 Report — AV1 encode, H.265 encode spike, CropFilter, streaming memory
-    ├── Sprint 15 Report — H.265 encode, encoder quality params, pre-flight validation, MKV round-trip tests
-    ├── Sprint 16 Report (Debt) — main.rs 1960→267, pipeline/lib.rs 1642→17, H.265 PTS fix, volume fix
-    ├── Sprint 17 Report — migrate subcommand, WASM audio, H.264 flush fix, process.rs split
-    └── Sprint 21 Report — Benchmark Demos [stub created 2026-03-13, to be completed at sprint close]
-```
-
-**Living state** (update in place): North Star, Roadmap, Decisions DB, hub "Current focus" callout.
-**Historical record** (new pages only, never edit old): Feedback Rounds, Retrospectives.
-
-Three [ARCHIVED] pages exist from old structure — do not use.
-
-## Linear Workspace Conventions
-
-**Team:** Splica (SPL) | **Project:** splica v0.1
-
-**Milestones:**
-- Phase 0 through Sprint 28 — all complete
-- Sprint 29 — planning (last feature sprint before debt)
-
-**Labels** (domain-based only): `core-infra`, `codec`, `container`, `dx`
-
-**Issue template:** https://linear.app/splica/document/issue-template-73f83bc8aac3
-
-**Conventions:** Always assign to splica v0.1 project + current sprint milestone + at least one domain label. Use blocks/blocked-by for dependencies. No estimates, no target dates yet.
-
-**Deferred:** Cycles, sub-issues, estimates, Views/Initiatives/Triage/SLAs.
-
-## Triage Workflow
-
-1. Ask engineer to investigate codebase — don't guess at code readiness.
-2. Record findings in Linear as "Sam's triage note" comment: what was reviewed, ready-to-start status, implementation guidance, risks.
-3. Move issues to Todo when confirmed ready.
-4. Update Notion if findings affect broader product picture.
-
-## Key Process Decision: Sprint reports are product-thesis instruments, not delivery logs (2026-03-11)
-
-Reports stopped after Sprint 11; backfilled for Sprints 12–14 on 2026-03-11. Format codified in Notion template. Two variants:
-- **Feature sprint:** Product Thesis Check (Moved/No movement/Blocked per persona) + What Shipped + What Didn't Ship + Single Biggest Gap
-- **Debt sprint:** What Was Resolved + Structural Health (line counts before/after) + What This Unlocks + Single Biggest Remaining Risk
-
-Rule: report written at sprint close, before next sprint planning. Never edited after the fact. "Moved" means a root need got materially closer to satisfied — not that a feature shipped that a persona might use someday.
+Hub: https://www.notion.so/31f1326e510281df9ce1cddebcb5c747 | Decisions DB ID: c4d6254c-f484-4605-9dfb-fabbdbb84b96
+Linear issue template: https://linear.app/splica/document/issue-template-73f83bc8aac3
+Labels: core-infra, codec, container, dx. Triage: engineer investigates → Sam notes in Linear → move to Todo.
+Sprint reports are product-thesis instruments, not delivery logs. Two formats (feature/debt) in Notion template.
 
 ## Key Decision: H.265 encode library = kvazaar, not x265 (2026-03-11)
 
@@ -210,6 +152,10 @@ Round 18 (Post-Sprint 28, 2026-03-16) key findings:
 ## Sprint 21: Benchmark Demos — COMPLETE (2026-03-14)
 
 All 8/8 issues shipped. Honest wins demonstrated: CLI ergonomics (3 tokens vs 7+), structured errors (typed exit codes), correct-by-default AR (letterbox), browser WASM (no ffmpeg equivalent), documented memory model. Raw encode throughput intentionally not benchmarked — splica will not win that cleanly. Round 14 focus group posted. Sprint 21 retro stub in Notion (to complete at sprint close).
+
+## Stress-Test Personas (2026-03-16) — see project_stress_test_personas.md
+
+Five personas stress-testing readiness beyond the original five. Ravi (batch ops), Ingrid (regulated/audit), Dev (mobile SDK), Mei (QC/post-production), Tobias (live streaming). Key finding: these personas test by running something they expect to FAIL — they want honesty about limits, not more features. Tobias defines the hard outer boundary: splica is explicitly not a live/streaming tool.
 
 ## Key Triage Finding: MKV EBML reuse approach (2026-03-11)
 
