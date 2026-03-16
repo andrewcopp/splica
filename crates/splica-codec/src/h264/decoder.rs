@@ -102,6 +102,12 @@ pub struct H264Decoder {
     flushing: bool,
     /// Color space parsed from the SPS VUI parameters.
     color_space: Option<ColorSpace>,
+    /// PTS of the last emitted frame, used to assign monotonic timestamps
+    /// to flushed frames that the decoder holds in its lookahead buffer.
+    last_emitted_pts: Option<splica_core::Timestamp>,
+    /// Estimated frame duration, derived from the difference between the
+    /// two most recent emitted PTS values. Falls back to 1 tick if unknown.
+    frame_duration: Option<splica_core::Timestamp>,
 }
 
 impl H264Decoder {
@@ -133,6 +139,8 @@ impl H264Decoder {
             pending_frames: VecDeque::new(),
             flushing: false,
             color_space,
+            last_emitted_pts: None,
+            frame_duration: None,
         })
     }
 
@@ -271,6 +279,12 @@ impl Decoder for H264Decoder {
                     Ok(Some(yuv)) => {
                         let frame = Self::yuv_to_video_frame(&yuv, pkt.pts, self.color_space)?;
                         self.pending_frames.push_back(frame);
+
+                        // Track frame duration from consecutive PTS values
+                        if let Some(prev_pts) = self.last_emitted_pts {
+                            self.frame_duration = pkt.pts.checked_sub(prev_pts);
+                        }
+                        self.last_emitted_pts = Some(pkt.pts);
                     }
                     Ok(None) => {
                         // No frame produced yet (buffering, B-frame reordering, etc.)
@@ -291,12 +305,30 @@ impl Decoder for H264Decoder {
                 self.flushing = true;
                 match self.inner.flush_remaining() {
                     Ok(frames) => {
+                        let mut next_pts = self.last_emitted_pts;
+
                         for yuv in &frames {
-                            // Use a zero timestamp for flushed frames — caller
-                            // should use the last known PTS
-                            let pts = splica_core::Timestamp::new(0, 1).unwrap();
+                            // Compute the PTS for this flushed frame by advancing
+                            // from the last emitted PTS by one frame duration.
+                            let pts = match (next_pts, self.frame_duration) {
+                                (Some(prev), Some(dur)) => prev.checked_add(dur),
+                                (Some(prev), None) => {
+                                    // No duration estimate — advance by 1 tick
+                                    let one_tick = splica_core::Timestamp::new(1, prev.timebase());
+                                    one_tick.and_then(|t| prev.checked_add(t))
+                                }
+                                (None, _) => None,
+                            };
+
+                            let pts = pts.unwrap_or_else(|| {
+                                // Fallback: no frames were emitted before flush
+                                // SAFETY: timebase 1 is always valid
+                                splica_core::Timestamp::new(0, 1).expect("timebase 1 is non-zero")
+                            });
+
                             let frame = Self::yuv_to_video_frame(yuv, pts, self.color_space)?;
                             self.pending_frames.push_back(frame);
+                            next_pts = Some(pts);
                         }
                     }
                     Err(e) => {
@@ -322,5 +354,240 @@ impl Decoder for H264Decoder {
 
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use splica_core::media::{PixelFormat, PlaneLayout, TrackIndex};
+    use splica_core::Decoder;
+
+    /// Parses Annex B byte stream into individual NAL units (without start codes).
+    fn parse_annex_b_nals(data: &[u8]) -> Vec<Vec<u8>> {
+        let mut nals = Vec::new();
+        let mut i = 0;
+
+        while i < data.len() {
+            // Find start code (00 00 00 01 or 00 00 01)
+            if i + 3 < data.len() && data[i] == 0 && data[i + 1] == 0 {
+                let start;
+                if data[i + 2] == 1 {
+                    start = i + 3;
+                } else if i + 4 <= data.len() && data[i + 2] == 0 && data[i + 3] == 1 {
+                    start = i + 4;
+                } else {
+                    i += 1;
+                    continue;
+                }
+
+                // Find the next start code
+                let mut end = start;
+                while end < data.len() {
+                    if end + 3 < data.len()
+                        && data[end] == 0
+                        && data[end + 1] == 0
+                        && (data[end + 2] == 1
+                            || (end + 4 <= data.len() && data[end + 2] == 0 && data[end + 3] == 1))
+                    {
+                        break;
+                    }
+                    end += 1;
+                }
+
+                if start < end {
+                    nals.push(data[start..end].to_vec());
+                }
+                i = end;
+            } else {
+                i += 1;
+            }
+        }
+
+        nals
+    }
+
+    /// Converts Annex B NAL units to MP4 length-prefixed format (4-byte length).
+    fn annex_b_to_mp4(annex_b: &[u8]) -> Vec<u8> {
+        let nals = parse_annex_b_nals(annex_b);
+        let mut out = Vec::new();
+        for nal in &nals {
+            let nal_type = nal[0] & 0x1F;
+            // Skip SPS (7) and PPS (8) — they go in the avcC, not in sample data
+            if nal_type == 7 || nal_type == 8 {
+                continue;
+            }
+            let len = nal.len() as u32;
+            out.extend_from_slice(&len.to_be_bytes());
+            out.extend_from_slice(nal);
+        }
+        out
+    }
+
+    /// Builds a minimal avcC record from Annex B encoded data containing SPS/PPS.
+    fn build_avcc_from_annex_b(annex_b: &[u8]) -> Vec<u8> {
+        let nals = parse_annex_b_nals(annex_b);
+        let mut sps_list = Vec::new();
+        let mut pps_list = Vec::new();
+
+        for nal in &nals {
+            let nal_type = nal[0] & 0x1F;
+            match nal_type {
+                7 => sps_list.push(nal.clone()),
+                8 => pps_list.push(nal.clone()),
+                _ => {}
+            }
+        }
+
+        let sps = sps_list.first().expect("no SPS found in encoded data");
+
+        let profile_idc = if sps.len() > 1 { sps[1] } else { 0x42 };
+        let compatibility = if sps.len() > 2 { sps[2] } else { 0xC0 };
+        let level_idc = if sps.len() > 3 { sps[3] } else { 0x1E };
+
+        let mut avcc = vec![
+            1, // version
+            profile_idc,
+            compatibility,
+            level_idc,
+            0xFF, // length_size_minus_one = 3 (4 bytes), reserved bits set
+            0xE0 | (sps_list.len() as u8), // num_sps with reserved bits
+        ];
+
+        for sps_nal in &sps_list {
+            let len = sps_nal.len() as u16;
+            avcc.extend_from_slice(&len.to_be_bytes());
+            avcc.extend_from_slice(sps_nal);
+        }
+
+        avcc.push(pps_list.len() as u8);
+        for pps_nal in &pps_list {
+            let len = pps_nal.len() as u16;
+            avcc.extend_from_slice(&len.to_be_bytes());
+            avcc.extend_from_slice(pps_nal);
+        }
+
+        avcc
+    }
+
+    fn make_test_frame(width: u32, height: u32, pts_ticks: i64) -> VideoFrame {
+        let y_stride = width as usize;
+        let uv_stride = (width / 2) as usize;
+        let y_size = y_stride * height as usize;
+        let uv_size = uv_stride * (height / 2) as usize;
+
+        let mut data = vec![128u8; y_size + uv_size * 2];
+        // Vary Y plane slightly per frame to avoid skip frames
+        let luma = (128_i64 + (pts_ticks % 10)) as u8;
+        for b in &mut data[..y_size] {
+            *b = luma;
+        }
+
+        VideoFrame::new(
+            width,
+            height,
+            PixelFormat::Yuv420p,
+            Some(splica_core::media::ColorSpace::BT709),
+            splica_core::Timestamp::new(pts_ticks, 30000).unwrap(),
+            Bytes::from(data),
+            vec![
+                PlaneLayout {
+                    offset: 0,
+                    stride: y_stride,
+                    width,
+                    height,
+                },
+                PlaneLayout {
+                    offset: y_size,
+                    stride: uv_stride,
+                    width: width / 2,
+                    height: height / 2,
+                },
+                PlaneLayout {
+                    offset: y_size + uv_size,
+                    stride: uv_stride,
+                    width: width / 2,
+                    height: height / 2,
+                },
+            ],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn test_that_flush_pts_values_are_monotonically_increasing() {
+        use crate::h264::encoder::H264Encoder;
+        use splica_core::Encoder;
+
+        // GIVEN — encode several frames to produce valid H.264 data
+        let mut encoder = H264Encoder::new().unwrap();
+        let frame_count = 10;
+        let mut encoded_packets = Vec::new();
+
+        for i in 0..frame_count {
+            let frame = make_test_frame(128, 128, i * 1001);
+            encoder.send_frame(Some(&Frame::Video(frame))).unwrap();
+            if let Some(pkt) = encoder.receive_packet().unwrap() {
+                encoded_packets.push(pkt);
+            }
+        }
+
+        // Flush encoder
+        encoder.send_frame(None).unwrap();
+        while let Some(pkt) = encoder.receive_packet().unwrap() {
+            encoded_packets.push(pkt);
+        }
+
+        assert!(
+            !encoded_packets.is_empty(),
+            "encoder must produce at least one packet"
+        );
+
+        // Build avcC from the first packet (which should contain SPS/PPS as IDR)
+        let avcc_data = build_avcc_from_annex_b(&encoded_packets[0].data);
+
+        // WHEN — decode all packets then flush
+        let mut decoder = H264Decoder::new(&avcc_data).unwrap();
+        let mut all_pts = Vec::new();
+
+        for pkt in &encoded_packets {
+            let mp4_data = annex_b_to_mp4(&pkt.data);
+            if mp4_data.is_empty() {
+                continue;
+            }
+            let decode_packet = Packet {
+                track_index: TrackIndex(0),
+                pts: pkt.pts,
+                dts: pkt.dts,
+                is_keyframe: pkt.is_keyframe,
+                data: Bytes::from(mp4_data),
+            };
+            decoder.send_packet(Some(&decode_packet)).unwrap();
+            while let Some(frame) = decoder.receive_frame().unwrap() {
+                all_pts.push(frame.pts());
+            }
+        }
+
+        // Flush the decoder
+        decoder.send_packet(None).unwrap();
+        while let Some(frame) = decoder.receive_frame().unwrap() {
+            all_pts.push(frame.pts());
+        }
+
+        // THEN — all PTS values are strictly monotonically increasing
+        assert!(
+            all_pts.len() >= 2,
+            "need at least 2 frames to verify monotonicity, got {}",
+            all_pts.len()
+        );
+
+        for window in all_pts.windows(2) {
+            assert!(
+                window[0] < window[1],
+                "PTS must be monotonically increasing: {:?} should be < {:?}",
+                window[0],
+                window[1]
+            );
+        }
     }
 }
