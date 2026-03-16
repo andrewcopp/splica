@@ -91,7 +91,7 @@ jobs:
         run: cargo build --target wasm32-unknown-unknown -p splica-wasm --release
       - name: Install wasm-pack
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
-      - name: Build splica-wasm with wasm-pack
+      - name: Build splica-wasm with wasm-pack (demux-only, default)
         run: wasm-pack build --target web crates/splica-wasm --release
       - name: Verify wasm-pack output
         run: |
@@ -99,16 +99,36 @@ jobs:
           test -f crates/splica-wasm/pkg/splica_wasm.js
           test -f crates/splica-wasm/pkg/splica_wasm.d.ts
           echo "wasm-pack output verified: .wasm, .js, .d.ts files present"
-      - name: Report WASM bundle size
-        id: wasm_size
+      - name: Record demux-only bundle size
+        id: wasm_demux_only
         run: |
           WASM_SIZE=$(stat -c%s crates/splica-wasm/pkg/splica_wasm_bg.wasm)
-          WASM_SIZE_KB=$((WASM_SIZE / 1024))
-          echo "splica_wasm_bytes=$WASM_SIZE" >> "$GITHUB_OUTPUT"
-          echo "### WASM Bundle Size" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Package | Size |" >> "$GITHUB_STEP_SUMMARY"
-          echo "|---------|------|" >> "$GITHUB_STEP_SUMMARY"
-          echo "| splica-wasm (wasm-pack, release) | ${WASM_SIZE_KB} KB (${WASM_SIZE} bytes) |" >> "$GITHUB_STEP_SUMMARY"
+          echo "size=$WASM_SIZE" >> "$GITHUB_OUTPUT"
+          echo "size_kb=$((WASM_SIZE / 1024))" >> "$GITHUB_OUTPUT"
+      - name: Build splica-wasm with wasm-pack (encode-av1)
+        run: wasm-pack build --target web crates/splica-wasm --release -- --features encode-av1
+      - name: Record encode-av1 bundle size
+        id: wasm_encode_av1
+        run: |
+          WASM_SIZE=$(stat -c%s crates/splica-wasm/pkg/splica_wasm_bg.wasm)
+          echo "size=$WASM_SIZE" >> "$GITHUB_OUTPUT"
+          echo "size_kb=$((WASM_SIZE / 1024))" >> "$GITHUB_OUTPUT"
+      - name: Report WASM bundle sizes
+        run: |
+          echo "### WASM Bundle Sizes by Feature Set" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Configuration | Size |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---------------|------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| demux-only (default) | ${{ steps.wasm_demux_only.outputs.size_kb }} KB |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| encode-av1 | ${{ steps.wasm_encode_av1.outputs.size_kb }} KB |" >> "$GITHUB_STEP_SUMMARY"
+      - name: Verify encode-av1 is larger than demux-only
+        run: |
+          DEMUX=${{ steps.wasm_demux_only.outputs.size }}
+          AV1=${{ steps.wasm_encode_av1.outputs.size }}
+          if [ "$AV1" -le "$DEMUX" ]; then
+            echo "ERROR: encode-av1 ($AV1 bytes) should be larger than demux-only ($DEMUX bytes)"
+            exit 1
+          fi
+          echo "OK: demux-only=${DEMUX} bytes, encode-av1=${AV1} bytes (delta: $((AV1 - DEMUX)) bytes)"
 
   fmt:
     name: Format

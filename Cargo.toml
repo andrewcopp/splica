@@ -24,7 +24,7 @@ splica-core = { path = "crates/splica-core" }
 splica-mp4 = { path = "crates/splica-mp4" }
 splica-webm = { path = "crates/splica-webm" }
 splica-mkv = { path = "crates/splica-mkv" }
-splica-codec = { path = "crates/splica-codec" }
+splica-codec = { path = "crates/splica-codec", default-features = false }
 splica-filter = { path = "crates/splica-filter" }
 splica-pipeline = { path = "crates/splica-pipeline" }
 splica-cli = { path = "crates/splica-cli" }
