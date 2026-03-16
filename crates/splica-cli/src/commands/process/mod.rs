@@ -1,6 +1,7 @@
 mod args;
 mod reencode;
 mod stream_copy;
+mod wiring;
 
 use miette::Result;
 

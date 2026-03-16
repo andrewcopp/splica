@@ -442,7 +442,7 @@ unsafe impl Send for H265Encoder {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use splica_core::media::PlaneLayout;
+    use splica_core::media::{PlaneLayout, VideoFrame};
     use splica_core::Timestamp;
 
     /// Create a synthetic YUV420p VideoFrame with a solid color.

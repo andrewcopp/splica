@@ -85,7 +85,7 @@ Key architectural decisions confirmed:
 - P0 items auto-schedule into the next sprint regardless of cadence.
 - Medium-severity items cannot be carried more than two sprints without an explicit priority call.
 
-**Current trigger status (Sprint 21 end):** `splica-mp4/src/muxer.rs` is 552 lines of production-only code — the 500-line trigger IS ACTIVE. `splica-mp4/src/demuxer.rs` is 527 lines (also production-only). Sprint 21 was a feature sprint; Sprint 22 should be a debt sprint (Sprint 20 was the debt sprint; 21 completes one feature sprint of the new 3:1 cycle). Recommend treating Sprint 22 as debt-focused given the active trigger. `splica-core/src/media.rs` is 984 lines (~649 non-test); split still pending 4+ sprints. `splica-codec/src/h264/encoder.rs` is 614 lines (~405 non-test). `splica-webm/src/demuxer/parsing.rs` is 455 lines with no tests.
+**Current trigger status (Sprint 24 end):** `splica-mp4/src/fmp4_muxer.rs` is 539 lines of production-only code — the 500-line trigger IS ACTIVE. `splica-mp4/src/muxer.rs` dropped to 414 lines and `splica-mp4/src/demuxer.rs` to 439 lines (both resolved by `track_parsing.rs` extraction and `mux_sample_table` extraction). `splica-core/src/media.rs` is 984 lines (~649 non-test); split still pending 5+ sprints. `splica-codec/src/h264/encoder.rs` is 614 lines (~405 non-test). `splica-webm/src/demuxer/parsing.rs` is 455 lines with no tests. Sprint 24 was a feature sprint. Sprint 25 should be a debt sprint given fmp4_muxer.rs active trigger.
 
 ## Quality Trends
 
