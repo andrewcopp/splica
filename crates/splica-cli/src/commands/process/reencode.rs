@@ -293,7 +293,11 @@ pub(super) fn reencode(args: &ProcessArgs<'_>, json_mode: bool) -> Result<Transc
                 .quality(quality_target)
                 .track_index(vtc.track_index)
                 .dimensions(enc_w, enc_h)
-                .speed(6)
+                .speed(match effective_preset {
+                    EncodePreset::Fast => 8,
+                    EncodePreset::Medium => 6,
+                    EncodePreset::Slow => 4,
+                })
                 .max_frame_rate(frame_rate_hint);
 
             if let Some(cs) = vtc.color_space {
