@@ -21,7 +21,9 @@ EXIT CODES:
   3  Resource exhausted — memory, file handles, or budget limits (retry after backoff)
 
 In --format json mode, errors include an \"error_kind\" field with one of:
-  bad_input, unsupported_format, internal_error, resource_exhausted"
+  bad_input, unsupported_format, internal_error, resource_exhausted
+
+Full contract: https://github.com/TODO/splica/blob/main/docs/exit-codes.md"
 )]
 struct Cli {
     #[command(subcommand)]

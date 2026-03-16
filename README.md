@@ -158,6 +158,17 @@ cargo build --features full
 cargo build --features "h264,av1,opus"
 ```
 
+## Exit Codes
+
+splica uses structured exit codes for automation. See [docs/exit-codes.md](docs/exit-codes.md) for the full contract, including JSON `error_kind` mapping and retry guidance.
+
+| Code | Meaning | Retryable |
+|------|---------|-----------|
+| 0 | Success | N/A |
+| 1 | Bad input (malformed file, unsupported format, invalid arguments) | No |
+| 2 | Internal error (encoder/muxer/I/O failure) | Yes |
+| 3 | Resource exhausted (memory, file handles, budget limits) | Yes |
+
 ## Project Status
 
 splica is in early development. The API is unstable and will change.
