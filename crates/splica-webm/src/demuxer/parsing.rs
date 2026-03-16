@@ -1218,7 +1218,7 @@ mod tests {
         // GIVEN — a track with an unsupported track type (subtitle = 17)
         let track = WebmTrack {
             track_number: 3,
-            track_type: 17,
+            track_type: 99,
             codec_id: "S_TEXT/UTF8".to_string(),
             codec_private: None,
             width: None,
