@@ -195,20 +195,27 @@ pub(super) fn reencode(args: &ProcessArgs<'_>, json_mode: bool) -> Result<Transc
         ));
     }
 
-    // Warn if any video track has color space metadata that will be lost
+    // Block re-encoding when color space metadata would be lost, unless opted in
     for vtc in &video_track_configs {
         if let Some(ref cs) = vtc.color_space {
             let cs_name = format_color_space_brief(cs);
-            let msg = format!(
-                "input has color space {cs_name} — color metadata will not be preserved in re-encoded output"
-            );
-            if json_mode {
-                println!(
-                    "{}",
-                    serde_json::json!({"event": "warning", "message": msg})
+            if args.allow_color_conversion {
+                let msg = format!(
+                    "input has color space {cs_name} — color metadata will not be preserved in re-encoded output"
                 );
+                if json_mode {
+                    println!(
+                        "{}",
+                        serde_json::json!({"event": "warning", "message": msg})
+                    );
+                } else {
+                    eprintln!("  Warning: {msg}");
+                }
             } else {
-                eprintln!("  Warning: {msg}");
+                return Err(miette::miette!(
+                    "input has color space {cs_name} — re-encoding would lose color metadata. \
+                     Pass --allow-color-conversion to proceed anyway, or use stream copy"
+                ));
             }
         }
     }

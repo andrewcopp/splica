@@ -29,6 +29,7 @@ pub(crate) struct ProcessArgs<'a> {
     pub crop: Option<&'a str>,
     pub volume: Option<&'a str>,
     pub codec: Option<&'a VideoCodecArg>,
+    pub allow_color_conversion: bool,
 }
 
 // ---------------------------------------------------------------------------
