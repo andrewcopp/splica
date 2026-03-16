@@ -122,3 +122,81 @@ fn detect_ebml_doctype(file: &mut (impl Read + Seek)) -> Result<DetectedFormat> 
     // Could not find DocType — default to MKV (the superset)
     Ok(DetectedFormat::Mkv)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    /// Builds a minimal EBML header with the given DocType string.
+    ///
+    /// Layout: EBML header ID (4 bytes) + EBML header size vint +
+    ///         DocType element ID (2 bytes) + DocType size vint + DocType string
+    fn make_ebml_header(doc_type: &str) -> Vec<u8> {
+        let dt_bytes = doc_type.as_bytes();
+        let dt_len = dt_bytes.len() as u8;
+
+        // DocType element: ID (0x42, 0x82) + 1-byte vint size + string
+        let doc_type_element_len = 2 + 1 + dt_len;
+
+        // EBML header: ID (4 bytes) + 1-byte vint total size + DocType element
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&[0x1A, 0x45, 0xDF, 0xA3]); // EBML header ID
+        buf.push(0x80 | doc_type_element_len); // header body size (1-byte vint)
+        buf.extend_from_slice(&[0x42, 0x82]); // DocType element ID
+        buf.push(0x80 | dt_len); // DocType string size (1-byte vint)
+        buf.extend_from_slice(dt_bytes);
+        buf
+    }
+
+    #[test]
+    fn test_that_webm_doctype_is_detected() {
+        let data = make_ebml_header("webm");
+
+        let mut cursor = Cursor::new(data);
+        let result = detect_format(&mut cursor).unwrap();
+
+        assert!(matches!(result, DetectedFormat::WebM));
+    }
+
+    #[test]
+    fn test_that_matroska_doctype_is_detected_as_mkv() {
+        let data = make_ebml_header("matroska");
+
+        let mut cursor = Cursor::new(data);
+        let result = detect_format(&mut cursor).unwrap();
+
+        assert!(matches!(result, DetectedFormat::Mkv));
+    }
+
+    #[test]
+    fn test_that_unknown_doctype_defaults_to_mkv() {
+        let data = make_ebml_header("unknown");
+
+        let mut cursor = Cursor::new(data);
+        let result = detect_format(&mut cursor).unwrap();
+
+        assert!(matches!(result, DetectedFormat::Mkv));
+    }
+
+    #[test]
+    fn test_that_truncated_ebml_header_defaults_to_mkv() {
+        // EBML magic bytes only, no DocType element following
+        let data = vec![0x1A, 0x45, 0xDF, 0xA3];
+
+        let mut cursor = Cursor::new(data);
+        let result = detect_format(&mut cursor).unwrap();
+
+        assert!(matches!(result, DetectedFormat::Mkv));
+    }
+
+    #[test]
+    fn test_that_empty_input_returns_error() {
+        let data: Vec<u8> = vec![];
+
+        let mut cursor = Cursor::new(data);
+        let result = detect_format(&mut cursor);
+
+        assert!(result.is_err());
+    }
+}
