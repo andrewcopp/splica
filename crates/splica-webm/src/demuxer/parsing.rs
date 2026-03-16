@@ -417,6 +417,11 @@ pub(crate) fn build_track_info(
             pixel_format: None,
             color_space: None,
             frame_rate: None,
+            profile: None,
+            level: None,
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
         })
     } else {
         None

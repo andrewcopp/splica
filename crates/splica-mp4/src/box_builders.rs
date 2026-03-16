@@ -498,7 +498,7 @@ mod tests {
 }
 
 // ---------------------------------------------------------------------------
-// Muxer-specific helpers (ftyp, sample table boxes, timestamp rescaling)
+// Muxer-specific helpers (ftyp, sample table boxes)
 // ---------------------------------------------------------------------------
 
 pub(crate) fn build_ftyp() -> Vec<u8> {

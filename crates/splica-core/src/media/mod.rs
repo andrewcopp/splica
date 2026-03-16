@@ -365,6 +365,16 @@ pub struct VideoTrackInfo {
     pub pixel_format: Option<PixelFormat>,
     pub color_space: Option<ColorSpace>,
     pub frame_rate: Option<FrameRate>,
+    /// Codec profile name (e.g., "High", "Main", "Baseline").
+    pub profile: Option<String>,
+    /// Codec level (e.g., "4.1", "3.0").
+    pub level: Option<String>,
+    /// Color primaries (e.g., "BT.709", "BT.2020").
+    pub color_primaries: Option<String>,
+    /// Transfer characteristics / OETF (e.g., "BT.709", "SMPTE ST 2084").
+    pub transfer_characteristics: Option<String>,
+    /// Matrix coefficients for YCbCr conversion (e.g., "BT.709", "BT.2020 non-constant").
+    pub matrix_coefficients: Option<String>,
 }
 
 /// Audio-specific track metadata.

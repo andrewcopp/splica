@@ -39,6 +39,16 @@ struct ProbeTrack {
     frame_rate: Option<String>,
     pixel_format: Option<String>,
     color_space: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    profile: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    level: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    color_primaries: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    transfer_characteristics: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    matrix_coefficients: Option<String>,
     sample_rate: Option<u32>,
     channels: Option<u32>,
     channel_layout: Option<String>,
@@ -106,6 +116,14 @@ fn probe_inner(file: &Path, format: &OutputFormat) -> Result<()> {
                     .video
                     .as_ref()
                     .and_then(|v| v.color_space.map(|cs| format_color_space(&cs))),
+                profile: t.video.as_ref().and_then(|v| v.profile.clone()),
+                level: t.video.as_ref().and_then(|v| v.level.clone()),
+                color_primaries: t.video.as_ref().and_then(|v| v.color_primaries.clone()),
+                transfer_characteristics: t
+                    .video
+                    .as_ref()
+                    .and_then(|v| v.transfer_characteristics.clone()),
+                matrix_coefficients: t.video.as_ref().and_then(|v| v.matrix_coefficients.clone()),
                 sample_rate: t.audio.as_ref().map(|a| a.sample_rate),
                 channels: t
                     .audio
@@ -154,6 +172,22 @@ fn probe_inner(file: &Path, format: &OutputFormat) -> Result<()> {
                 }
                 if let Some(ref cs) = track.color_space {
                     println!("    Color space: {cs}");
+                }
+                if let Some(ref profile) = track.profile {
+                    print!("    Profile: {profile}");
+                    if let Some(ref level) = track.level {
+                        print!(", Level: {level}");
+                    }
+                    println!();
+                }
+                if let Some(ref cp) = track.color_primaries {
+                    println!("    Color primaries: {cp}");
+                }
+                if let Some(ref tc) = track.transfer_characteristics {
+                    println!("    Transfer: {tc}");
+                }
+                if let Some(ref mc) = track.matrix_coefficients {
+                    println!("    Matrix: {mc}");
                 }
                 if let Some(sr) = track.sample_rate {
                     print!("    Sample rate: {sr} Hz");

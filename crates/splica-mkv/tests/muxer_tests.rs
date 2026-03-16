@@ -24,6 +24,11 @@ fn make_video_track(index: u32) -> TrackInfo {
             pixel_format: None,
             color_space: None,
             frame_rate: None,
+            profile: None,
+            level: None,
+            color_primaries: None,
+            transfer_characteristics: None,
+            matrix_coefficients: None,
         }),
         audio: None,
     }
@@ -266,6 +271,11 @@ fn test_that_mkv_roundtrips_h264_codec_id() {
                 pixel_format: None,
                 color_space: None,
                 frame_rate: None,
+                profile: None,
+                level: None,
+                color_primaries: None,
+                transfer_characteristics: None,
+                matrix_coefficients: None,
             }),
             audio: None,
         };
