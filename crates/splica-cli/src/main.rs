@@ -26,7 +26,7 @@ EXIT CODES:
 In --format json mode, errors include an \"error_kind\" field with one of:
   bad_input, unsupported_format, internal_error, resource_exhausted
 
-Full contract: https://github.com/TODO/splica/blob/main/docs/exit-codes.md"
+Full contract: docs/exit-codes.md (in the splica repository)"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -112,12 +112,6 @@ enum Commands {
         /// Only valid when output codec is H.264. Default: auto.
         #[arg(long)]
         h264_level: Option<H264LevelArg>,
-
-        /// Allow re-encoding when the input has non-standard color space metadata
-        /// (e.g., HDR/BT.2020). Without this flag, splica will error rather than
-        /// silently losing color information.
-        #[arg(long)]
-        allow_color_conversion: bool,
 
         /// Output format for results (text or json).
         #[arg(long, default_value = "text")]
@@ -271,7 +265,6 @@ fn main() -> Result<()> {
             audio_bitrate,
             h264_profile,
             h264_level,
-            allow_color_conversion,
             format,
         } => commands::process::process(
             &ProcessArgs {
@@ -290,7 +283,6 @@ fn main() -> Result<()> {
                 audio_bitrate: audio_bitrate.as_deref(),
                 h264_profile: h264_profile.as_ref(),
                 h264_level: h264_level.as_ref(),
-                allow_color_conversion,
             },
             &format,
         ),
@@ -335,7 +327,6 @@ fn main() -> Result<()> {
                     audio_bitrate: None,
                     h264_profile: None,
                     h264_level: None,
-                    allow_color_conversion: false,
                 },
                 &OutputFormat::Text,
             )
@@ -368,7 +359,6 @@ fn main() -> Result<()> {
                     audio_bitrate: None,
                     h264_profile: None,
                     h264_level: None,
-                    allow_color_conversion: false,
                 },
                 &format,
             )

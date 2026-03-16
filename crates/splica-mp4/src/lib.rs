@@ -5,6 +5,7 @@
 
 pub(crate) mod box_builders;
 pub mod boxes;
+#[cfg(feature = "wasm")]
 pub(crate) mod codec_strings;
 pub mod demuxer;
 pub mod error;

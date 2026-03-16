@@ -63,31 +63,31 @@ pub(crate) fn set_config_option(
     Ok(())
 }
 
-/// Maps splica ColorPrimaries to ITU-T H.265 colour_primaries value.
-pub(crate) fn color_primaries_to_itu(p: ColorPrimaries) -> u8 {
+/// Maps splica ColorPrimaries to kvazaar string name.
+fn color_primaries_to_kvz(p: ColorPrimaries) -> &'static str {
     match p {
-        ColorPrimaries::Bt709 => 1,
-        ColorPrimaries::Bt2020 => 9,
-        ColorPrimaries::Smpte432 => 12,
+        ColorPrimaries::Bt709 => "bt709",
+        ColorPrimaries::Bt2020 => "bt2020",
+        ColorPrimaries::Smpte432 => "smpte432",
     }
 }
 
-/// Maps splica TransferCharacteristics to ITU-T H.265 transfer_characteristics value.
-pub(crate) fn transfer_characteristics_to_itu(t: TransferCharacteristics) -> u8 {
+/// Maps splica TransferCharacteristics to kvazaar string name.
+fn transfer_to_kvz(t: TransferCharacteristics) -> &'static str {
     match t {
-        TransferCharacteristics::Bt709 => 1,
-        TransferCharacteristics::Smpte2084 => 16,
-        TransferCharacteristics::HybridLogGamma => 18,
+        TransferCharacteristics::Bt709 => "bt709",
+        TransferCharacteristics::Smpte2084 => "smpte2084",
+        TransferCharacteristics::HybridLogGamma => "arib-std-b67",
     }
 }
 
-/// Maps splica MatrixCoefficients to ITU-T H.265 matrix_coefficients value.
-pub(crate) fn matrix_coefficients_to_itu(m: MatrixCoefficients) -> u8 {
+/// Maps splica MatrixCoefficients to kvazaar string name.
+fn matrix_coefficients_to_kvz(m: MatrixCoefficients) -> &'static str {
     match m {
-        MatrixCoefficients::Identity => 0,
-        MatrixCoefficients::Bt709 => 1,
-        MatrixCoefficients::Bt2020NonConstant => 9,
-        MatrixCoefficients::Bt2020Constant => 10,
+        MatrixCoefficients::Identity => "GBR",
+        MatrixCoefficients::Bt709 => "bt709",
+        MatrixCoefficients::Bt2020NonConstant => "bt2020nc",
+        MatrixCoefficients::Bt2020Constant => "bt2020c",
     }
 }
 
@@ -185,18 +185,19 @@ pub(crate) fn open_kvazaar_encoder(
     }
 
     // Set VUI color space parameters
+    // Kvazaar expects string names (not ITU numeric values) for these options.
     if let Some(cs) = &params.color_space {
-        let prim = color_primaries_to_itu(cs.primaries);
-        let transfer = transfer_characteristics_to_itu(cs.transfer);
-        let matrix = matrix_coefficients_to_itu(cs.matrix);
+        let prim = color_primaries_to_kvz(cs.primaries);
+        let transfer = transfer_to_kvz(cs.transfer);
+        let matrix = matrix_coefficients_to_kvz(cs.matrix);
         let range = match cs.range {
-            ColorRange::Full => "full",
-            ColorRange::Limited => "limited",
+            ColorRange::Full => "pc",
+            ColorRange::Limited => "tv",
         };
 
-        set_config_option(config_parse, cfg, "colorprim", &prim.to_string())?;
-        set_config_option(config_parse, cfg, "transfer", &transfer.to_string())?;
-        set_config_option(config_parse, cfg, "colormatrix", &matrix.to_string())?;
+        set_config_option(config_parse, cfg, "colorprim", prim)?;
+        set_config_option(config_parse, cfg, "transfer", transfer)?;
+        set_config_option(config_parse, cfg, "colormatrix", matrix)?;
         set_config_option(config_parse, cfg, "range", range)?;
     }
 

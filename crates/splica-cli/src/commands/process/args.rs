@@ -36,7 +36,6 @@ pub(crate) struct ProcessArgs<'a> {
     pub audio_bitrate: Option<&'a str>,
     pub h264_profile: Option<&'a H264ProfileArg>,
     pub h264_level: Option<&'a H264LevelArg>,
-    pub allow_color_conversion: bool,
 }
 
 // ---------------------------------------------------------------------------
