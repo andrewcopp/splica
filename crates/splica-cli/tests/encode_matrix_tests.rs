@@ -65,7 +65,7 @@ fn run_process(input: &str, output_path: &str, extra_args: &[&str]) -> serde_jso
     let last_line = stdout
         .lines()
         .filter(|l| !l.trim().is_empty())
-        .last()
+        .next_back()
         .unwrap_or_else(|| panic!("expected JSON output from process, got empty stdout"));
     serde_json::from_str(last_line)
         .unwrap_or_else(|e| panic!("expected valid JSON from process, got error {e}: {last_line}"))

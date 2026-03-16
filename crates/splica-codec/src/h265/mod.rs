@@ -15,6 +15,4 @@ mod encoder;
 #[cfg(feature = "encode-h265")]
 mod ffi_helpers;
 #[cfg(feature = "encode-h265")]
-mod sps;
-#[cfg(feature = "encode-h265")]
 pub use encoder::{H265Encoder, H265EncoderBuilder, H265EncoderConfig};

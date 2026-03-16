@@ -9,26 +9,24 @@
 use std::io::{Seek, SeekFrom, Write};
 
 use splica_core::{
-    Codec, MuxError, Muxer, Packet, ResourceBudget, Timestamp, TrackIndex, TrackInfo, TrackKind,
-    VideoCodec,
+    Codec, MuxError, Muxer, Packet, ResourceBudget, TrackIndex, TrackInfo, TrackKind, VideoCodec,
 };
 
 use crate::box_builders::{
-    build_ctts, build_dinf, build_ftyp, build_hdlr, build_mdhd, build_mvhd, build_nmhd, build_smhd,
-    build_stco, build_stsc, build_stsd, build_stss, build_stsz, build_stts, build_tkhd, build_vmhd,
-    io_err, make_box, rescale_timestamp,
+    build_dinf, build_hdlr, build_mdhd, build_mvhd, build_smhd, build_stsd, build_tkhd, build_vmhd,
+    io_err, make_box, make_full_box, rescale_timestamp,
 };
 use crate::boxes::hdlr::HandlerType;
 use crate::boxes::stsd::CodecConfig;
 use crate::metadata::MetadataBox;
 
 /// A single sample's metadata recorded during muxing.
-pub(crate) struct MuxSample {
-    pub(crate) offset: u64,
-    pub(crate) size: u32,
-    pub(crate) dts: i64,
-    pub(crate) cts_offset: i32,
-    pub(crate) is_sync: bool,
+struct MuxSample {
+    offset: u64,
+    size: u32,
+    dts: i64,
+    cts_offset: i32,
+    is_sync: bool,
 }
 
 /// Collected metadata for one track during muxing.
@@ -411,4 +409,124 @@ impl<W: Write + Seek> Muxer for Mp4Muxer<W> {
     fn finalize(&mut self) -> Result<(), MuxError> {
         self.finalize_file()
     }
+}
+
+// ---------------------------------------------------------------------------
+// Sample table box builders (local to muxer — uses muxer's MuxSample type)
+// ---------------------------------------------------------------------------
+
+fn build_ftyp() -> Vec<u8> {
+    let mut body = Vec::new();
+    body.extend_from_slice(b"isom");
+    body.extend_from_slice(&0u32.to_be_bytes());
+    body.extend_from_slice(b"isom");
+    body.extend_from_slice(b"iso2");
+    body.extend_from_slice(b"mp41");
+    make_box(b"ftyp", &body)
+}
+
+fn build_stts(samples: &[MuxSample]) -> Vec<u8> {
+    if samples.is_empty() {
+        let mut body = vec![0, 0, 0, 0];
+        body.extend_from_slice(&0u32.to_be_bytes());
+        return make_full_box(b"stts", &body);
+    }
+    let mut entries: Vec<(u32, u32)> = Vec::new();
+    for i in 0..samples.len() {
+        let delta = if i + 1 < samples.len() {
+            (samples[i + 1].dts - samples[i].dts) as u32
+        } else if !entries.is_empty() {
+            entries.last().unwrap().1
+        } else {
+            1
+        };
+        if let Some(last) = entries.last_mut() {
+            if last.1 == delta {
+                last.0 += 1;
+                continue;
+            }
+        }
+        entries.push((1, delta));
+    }
+    let mut body = vec![0, 0, 0, 0];
+    body.extend_from_slice(&(entries.len() as u32).to_be_bytes());
+    for (count, delta) in &entries {
+        body.extend_from_slice(&count.to_be_bytes());
+        body.extend_from_slice(&delta.to_be_bytes());
+    }
+    make_full_box(b"stts", &body)
+}
+
+fn build_ctts(samples: &[MuxSample]) -> Option<Vec<u8>> {
+    if samples.iter().all(|s| s.cts_offset == 0) {
+        return None;
+    }
+    let mut entries: Vec<(u32, i32)> = Vec::new();
+    for sample in samples {
+        if let Some(last) = entries.last_mut() {
+            if last.1 == sample.cts_offset {
+                last.0 += 1;
+                continue;
+            }
+        }
+        entries.push((1, sample.cts_offset));
+    }
+    let mut body = Vec::new();
+    body.extend_from_slice(&[0, 0, 0, 0]);
+    body.extend_from_slice(&(entries.len() as u32).to_be_bytes());
+    for (count, offset) in &entries {
+        body.extend_from_slice(&count.to_be_bytes());
+        body.extend_from_slice(&(*offset as u32).to_be_bytes());
+    }
+    Some(make_full_box(b"ctts", &body))
+}
+
+fn build_stsc(sample_count: u32) -> Vec<u8> {
+    let mut body = vec![0, 0, 0, 0];
+    if sample_count > 0 {
+        body.extend_from_slice(&1u32.to_be_bytes());
+        body.extend_from_slice(&1u32.to_be_bytes());
+        body.extend_from_slice(&1u32.to_be_bytes());
+        body.extend_from_slice(&1u32.to_be_bytes());
+    } else {
+        body.extend_from_slice(&0u32.to_be_bytes());
+    }
+    make_full_box(b"stsc", &body)
+}
+
+fn build_stsz(samples: &[MuxSample]) -> Vec<u8> {
+    let mut body = vec![0, 0, 0, 0];
+    body.extend_from_slice(&0u32.to_be_bytes());
+    body.extend_from_slice(&(samples.len() as u32).to_be_bytes());
+    for sample in samples {
+        body.extend_from_slice(&sample.size.to_be_bytes());
+    }
+    make_full_box(b"stsz", &body)
+}
+
+fn build_stco(samples: &[MuxSample]) -> Vec<u8> {
+    let mut body = vec![0, 0, 0, 0];
+    body.extend_from_slice(&(samples.len() as u32).to_be_bytes());
+    for sample in samples {
+        body.extend_from_slice(&sample.offset.to_be_bytes());
+    }
+    make_full_box(b"co64", &body)
+}
+
+fn build_stss(samples: &[MuxSample]) -> Option<Vec<u8>> {
+    let keyframes: Vec<u32> = samples
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s.is_sync)
+        .map(|(i, _)| i as u32 + 1)
+        .collect();
+    if keyframes.len() == samples.len() {
+        return None;
+    }
+    let mut body = vec![0, 0, 0, 0];
+    body.extend_from_slice(&(keyframes.len() as u32).to_be_bytes());
+    for kf in &keyframes {
+        body.extend_from_slice(&kf.to_be_bytes());
+    }
+    Some(make_full_box(b"stss", &body))
 }

@@ -43,7 +43,9 @@ pub struct H265Encoder {
     header_data: Vec<u8>,
     /// Whether the header has been prepended to the first keyframe.
     header_sent: bool,
-    /// Maximum frame rate hint for timestamp calculation.
+    /// Maximum frame rate hint passed to kvazaar config. Stored for
+    /// potential future use in PTS fallback estimation.
+    #[allow(dead_code)]
     max_frame_rate: Option<f32>,
 }
 
