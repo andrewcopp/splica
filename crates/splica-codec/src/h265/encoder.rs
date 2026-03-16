@@ -222,6 +222,17 @@ impl H265Encoder {
             .into());
         }
 
+        // Read the original PTS from src_out before freeing it.
+        // Kvazaar echoes back the input kvz_picture as src_out, preserving
+        // the pts field we set during send_frame. This avoids relying on
+        // info_out.poc matching the frame submission index.
+        let src_pts = if !src_out.is_null() {
+            // SAFETY: src_out is a valid kvz_picture returned by encoder_encode.
+            Some(unsafe { (*src_out).pts })
+        } else {
+            None
+        };
+
         // Free reconstructed and source pictures if returned
         if let Some(picture_free) = self.api.picture_free {
             if !pic_out.is_null() {
@@ -260,10 +271,20 @@ impl H265Encoder {
                 self.header_sent = true;
             }
 
-            // Look up the original input PTS by poc instead of reconstructing
+            // Look up the original input PTS by poc. If src_out echoed
+            // back ticks, use those to validate; but the HashMap stores the
+            // full Timestamp (ticks + timebase) which we need to preserve.
             let pts = if let Some(original_pts) = self.pts_by_poc.remove(&info_out.poc) {
                 self.last_pts = Some(original_pts);
                 original_pts
+            } else if let Some(src_ticks) = src_pts {
+                // src_out echoed input ticks — reconstruct from last known timebase
+                let timebase = self.last_pts.map(|t| t.timebase()).unwrap_or(1_000_000);
+                let ts = splica_core::Timestamp::new(src_ticks, timebase).unwrap_or_else(|| {
+                    splica_core::Timestamp::new(0, 1).expect("Timestamp::new(0, 1) is infallible")
+                });
+                self.last_pts = Some(ts);
+                ts
             } else if let Some(last) = self.last_pts {
                 // Fallback during flush: increment from last known PTS
                 let next =
