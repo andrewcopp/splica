@@ -343,6 +343,11 @@ pub(super) fn reencode(args: &ProcessArgs<'_>, json_mode: bool) -> Result<Transc
             builder = builder.with_encoder(vtc.track_index, encoder);
         }
 
+        // Update muxer track dimensions if --resize was specified
+        if args.resize.is_some() {
+            builder = builder.with_output_dimensions(vtc.track_index, enc_w, enc_h);
+        }
+
         // Add scale filter if --resize was specified
         if args.resize.is_some() {
             let aspect_mode = match args.aspect_mode_arg {

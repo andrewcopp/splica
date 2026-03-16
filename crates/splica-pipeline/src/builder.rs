@@ -85,6 +85,7 @@ pub struct PipelineBuilder {
     pub(crate) audio_encoders: HashMap<TrackIndex, Box<dyn AudioEncoder>>,
     pub(crate) audio_filters: HashMap<TrackIndex, Vec<Box<dyn AudioFilter>>>,
     pub(crate) output_codecs: HashMap<TrackIndex, Codec>,
+    pub(crate) output_dimensions: HashMap<TrackIndex, (u32, u32)>,
 }
 
 impl Default for PipelineBuilder {
@@ -107,6 +108,7 @@ impl PipelineBuilder {
             audio_encoders: HashMap::new(),
             audio_filters: HashMap::new(),
             output_codecs: HashMap::new(),
+            output_dimensions: HashMap::new(),
         }
     }
 
@@ -206,6 +208,17 @@ impl PipelineBuilder {
     /// the track info before calling `Muxer::add_track`.
     pub fn with_output_codec(mut self, track: TrackIndex, codec: Codec) -> Self {
         self.output_codecs.insert(track, codec);
+        self
+    }
+
+    /// Overrides the video dimensions reported to the muxer for a specific track.
+    ///
+    /// When a resize filter changes the frame dimensions, the muxer needs to
+    /// know the output dimensions to write correct container metadata (e.g.,
+    /// tkhd/stsd in MP4). This override is applied to the track info before
+    /// calling `Muxer::add_track`.
+    pub fn with_output_dimensions(mut self, track: TrackIndex, width: u32, height: u32) -> Self {
+        self.output_dimensions.insert(track, (width, height));
         self
     }
 
@@ -312,6 +325,7 @@ impl PipelineBuilder {
             muxer,
             track_modes,
             output_codecs: self.output_codecs,
+            output_dimensions: self.output_dimensions,
             on_event: self.on_event,
         })
     }

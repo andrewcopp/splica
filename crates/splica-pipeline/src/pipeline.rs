@@ -20,6 +20,7 @@ pub struct Pipeline {
     pub(crate) muxer: Box<dyn Muxer>,
     pub(crate) track_modes: HashMap<TrackIndex, TrackMode>,
     pub(crate) output_codecs: HashMap<TrackIndex, Codec>,
+    pub(crate) output_dimensions: HashMap<TrackIndex, (u32, u32)>,
     pub(crate) on_event: Option<Box<dyn Fn(PipelineEvent)>>,
 }
 
@@ -181,12 +182,18 @@ impl Pipeline {
         let tracks = self.demuxer.tracks().to_vec();
         let mut input_to_output: HashMap<TrackIndex, TrackIndex> = HashMap::new();
         for track_info in &tracks {
-            let info = if let Some(codec) = self.output_codecs.get(&track_info.index) {
+            let info = {
                 let mut overridden = track_info.clone();
-                overridden.codec = codec.clone();
+                if let Some(codec) = self.output_codecs.get(&track_info.index) {
+                    overridden.codec = codec.clone();
+                }
+                if let Some(&(w, h)) = self.output_dimensions.get(&track_info.index) {
+                    if let Some(ref mut video) = overridden.video {
+                        video.width = w;
+                        video.height = h;
+                    }
+                }
                 overridden
-            } else {
-                track_info.clone()
             };
             let output_idx = self.muxer.add_track(&info)?;
             input_to_output.insert(track_info.index, output_idx);
