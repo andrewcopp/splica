@@ -66,7 +66,13 @@ fn join_inner(inputs: &[&Path], output: &Path, format: &OutputFormat) -> Result<
     // Validate all inputs share the same track layout and codecs
     for (i, &input_path) in inputs.iter().enumerate().skip(1) {
         let demuxer = open_demuxer(input_path)?;
-        validate_tracks_match(&reference_tracks, demuxer.tracks(), inputs[0], input_path, i)?;
+        validate_tracks_match(
+            &reference_tracks,
+            demuxer.tracks(),
+            inputs[0],
+            input_path,
+            i,
+        )?;
     }
 
     // Set up muxer
@@ -79,8 +85,7 @@ fn join_inner(inputs: &[&Path], output: &Path, format: &OutputFormat) -> Result<
     }
 
     let mut packet_count: u64 = 0;
-    let mut cumulative_duration = Timestamp::new(0, 90_000)
-        .expect("90kHz timebase is valid");
+    let mut cumulative_duration = Timestamp::new(0, 90_000).expect("90kHz timebase is valid");
 
     // Process each input file sequentially
     for &input_path in inputs {
@@ -110,9 +115,9 @@ fn join_inner(inputs: &[&Path], output: &Path, format: &OutputFormat) -> Result<
         // otherwise fall back to the max PTS seen
         let file_duration = file_duration_from_tracks(demuxer.tracks());
         cumulative_duration = match file_duration {
-            Some(dur) => cumulative_duration
-                .checked_add(dur)
-                .ok_or_else(|| miette::miette!("timestamp overflow computing cumulative duration"))?,
+            Some(dur) => cumulative_duration.checked_add(dur).ok_or_else(|| {
+                miette::miette!("timestamp overflow computing cumulative duration")
+            })?,
             None => max_pts,
         };
     }
@@ -220,10 +225,7 @@ fn offset_packet(packet: &Packet, offset: Timestamp) -> Result<Packet> {
 
 /// Computes the maximum duration across all tracks in a demuxer.
 fn file_duration_from_tracks(tracks: &[splica_core::TrackInfo]) -> Option<Timestamp> {
-    tracks
-        .iter()
-        .filter_map(|t| t.duration)
-        .max()
+    tracks.iter().filter_map(|t| t.duration).max()
 }
 
 #[cfg(test)]

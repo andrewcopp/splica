@@ -32,6 +32,7 @@ pub(crate) struct ProcessArgs<'a> {
     pub volume: Option<&'a str>,
     pub codec: Option<&'a VideoCodecArg>,
     pub audio_codec: Option<&'a AudioCodecArg>,
+    pub audio_bitrate: Option<&'a str>,
     pub allow_color_conversion: bool,
 }
 

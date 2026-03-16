@@ -198,6 +198,10 @@ Rule: report written at sprint close, before next sprint planning. Never edited 
 
 **x265 is GPL-2.0** — incompatible with splica's Apache-2.0 license. SPL-87's original description said "LGPL — same as libde265" — this was wrong. kvazaar (University of Tampere) is BSD-3-Clause, fully compatible. Competitive quality at fast-to-medium presets. No existing Rust bindings — requires creating `kvazaar-sys` (bindgen) as a prerequisite. Feature flag: `codec-h265-enc` (separate from `codec-h265` which gates libde265-rs decode — they are different C libraries). VUI color support confirmed in kvazaar API.
 
+## Focus Group Round 15 — Post-Sprint 25 (2026-03-15) — see focus-group-round-15.md
+
+P0: (1) Preset re-encode silently downsamps frame rate to 30fps for fast/medium presets — fix by defaulting to source frame rate unless --max-fps set. (2) Preset re-encode uses content-blind bitrate default (no --crf/--bitrate) — fix by defaulting to CRF. High: (3) trim + join have no liveness signal; join result missing duration_seconds. (4) WASM encode path absent — rav1e is already pure Rust, prerequisite met. Medium: (5) Custom I/O path for PipelineBuilder undocumented.
+
 ## Sprint 21: Benchmark Demos — COMPLETE (2026-03-14)
 
 All 8/8 issues shipped. Honest wins demonstrated: CLI ergonomics (3 tokens vs 7+), structured errors (typed exit codes), correct-by-default AR (letterbox), browser WASM (no ffmpeg equivalent), documented memory model. Raw encode throughput intentionally not benchmarked — splica will not win that cleanly. Round 14 focus group posted. Sprint 21 retro stub in Notion (to complete at sprint close).

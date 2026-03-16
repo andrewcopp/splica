@@ -74,7 +74,6 @@ fn drain_decoder_to_muxer(
     counters: &mut PipelineCounters,
     mut rate_limit: Option<&mut FrameRateLimit>,
 ) -> Result<(), PipelineError> {
-
     while let Some(frame) = decoder.receive_frame()? {
         counters.frames_decoded += 1;
         emit_event(
@@ -433,9 +432,9 @@ mod frame_rate_limit_tests {
         let mut limiter = FrameRateLimit::new(10.0); // 100ms interval
 
         assert!(!limiter.should_drop(0.0));
-        assert!(limiter.should_drop(0.050));  // 50ms < 100ms, dropped
+        assert!(limiter.should_drop(0.050)); // 50ms < 100ms, dropped
         assert!(!limiter.should_drop(0.100)); // 100ms >= 100ms, emitted
-        assert!(limiter.should_drop(0.150));  // 50ms since last emit, dropped
+        assert!(limiter.should_drop(0.150)); // 50ms since last emit, dropped
         assert!(!limiter.should_drop(0.200)); // 100ms since last emit, emitted
     }
 

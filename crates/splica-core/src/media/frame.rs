@@ -2,8 +2,8 @@
 
 use bytes::Bytes;
 
-use super::ChannelLayout;
 use super::color::ColorSpace;
+use super::ChannelLayout;
 use crate::timestamp::Timestamp;
 
 // ---------------------------------------------------------------------------

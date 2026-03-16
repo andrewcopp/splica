@@ -57,7 +57,14 @@ fn test_that_join_output_has_more_packets_than_single_input() {
     // WHEN — join the file with itself
     let output = splica_binary()
         .args([
-            "join", "-i", &input, &input, "-o", output_path, "--format", "json",
+            "join",
+            "-i",
+            &input,
+            &input,
+            "-o",
+            output_path,
+            "--format",
+            "json",
         ])
         .output()
         .unwrap();

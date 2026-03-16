@@ -22,8 +22,8 @@ use std::io::Write;
 use splica_core::{MuxError, Muxer, Packet, TrackIndex, TrackInfo, TrackKind};
 
 use crate::box_builders::{
-    build_dinf, build_hdlr, build_mdhd, build_mvhd, build_nmhd, build_smhd, build_stsd,
-    build_tkhd, build_vmhd, io_err, make_box, make_full_box,
+    build_dinf, build_hdlr, build_mdhd, build_mvhd, build_nmhd, build_smhd, build_stsd, build_tkhd,
+    build_vmhd, io_err, make_box, make_full_box,
 };
 use crate::boxes::hdlr::HandlerType;
 use crate::boxes::stsd::CodecConfig;

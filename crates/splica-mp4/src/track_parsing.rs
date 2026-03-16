@@ -4,8 +4,7 @@
 //! media header, handler, and sample table sub-boxes.
 
 use crate::boxes::{
-    ctts, find_box, hdlr, mdhd, mvhd, require_box, stco, stsc, stsd, stss, stsz, stts, tkhd,
-    FourCC,
+    ctts, find_box, hdlr, mdhd, mvhd, require_box, stco, stsc, stsd, stss, stsz, stts, tkhd, FourCC,
 };
 use crate::error::Mp4Error;
 use crate::sample_table;

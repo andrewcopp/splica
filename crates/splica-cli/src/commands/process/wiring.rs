@@ -153,6 +153,7 @@ pub(super) fn wire_audio_codec(
     mut builder: PipelineBuilder,
     ac: &AudioCodecConfig,
     target_audio_codec: &AudioCodec,
+    audio_bitrate: u32,
 ) -> Result<PipelineBuilder> {
     // Decoder
     match &ac.codec {
@@ -194,7 +195,7 @@ pub(super) fn wire_audio_codec(
     match target_audio_codec {
         AudioCodec::Aac => {
             let encoder = AacEncoderBuilder::new()
-                .bitrate(128_000)
+                .bitrate(audio_bitrate)
                 .sample_rate(ac.sample_rate)
                 .channel_layout(channel_layout)
                 .track_index(ac.track_index)
@@ -205,7 +206,7 @@ pub(super) fn wire_audio_codec(
         }
         AudioCodec::Opus => {
             let encoder = OpusEncoderBuilder::new()
-                .bitrate(128_000)
+                .bitrate(audio_bitrate)
                 .sample_rate(ac.sample_rate)
                 .channel_layout(channel_layout)
                 .track_index(ac.track_index)

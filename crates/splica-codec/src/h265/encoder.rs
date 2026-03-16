@@ -9,9 +9,7 @@ use std::ptr;
 
 use bytes::Bytes;
 use splica_core::error::EncodeError;
-use splica_core::media::{
-    ColorSpace, Frame, Packet, PixelFormat, QualityTarget, TrackIndex,
-};
+use splica_core::media::{ColorSpace, Frame, Packet, PixelFormat, QualityTarget, TrackIndex};
 use splica_core::Encoder;
 
 use kvazaar_sys::{
@@ -21,7 +19,7 @@ use kvazaar_sys::{
 
 use crate::error::CodecError;
 
-use super::sps::{copy_plane, KvzConfigParams, open_configured_encoder};
+use super::sps::{copy_plane, open_configured_encoder, KvzConfigParams};
 
 /// H.265 encoder wrapping kvazaar.
 ///
@@ -437,7 +435,6 @@ impl Drop for H265Encoder {
 // to the C library and protected by its own synchronization. The kvz_api table
 // is a static immutable struct. The encoder pointer is only used from &mut self.
 unsafe impl Send for H265Encoder {}
-
 
 #[cfg(test)]
 mod tests {

@@ -280,7 +280,14 @@ pub(super) fn reencode(args: &ProcessArgs<'_>, json_mode: bool) -> Result<Transc
         .with_muxer(muxer);
 
     for vtc in &video_track_configs {
-        builder = wire_video_encoder(builder, vtc, args, out_container, quality_target, frame_rate_hint)?;
+        builder = wire_video_encoder(
+            builder,
+            vtc,
+            args,
+            out_container,
+            quality_target,
+            frame_rate_hint,
+        )?;
     }
 
     // Wire audio decoder+encoder for tracks that need transcoding
@@ -288,7 +295,11 @@ pub(super) fn reencode(args: &ProcessArgs<'_>, json_mode: bool) -> Result<Transc
         if !needs_transcode {
             continue;
         }
-        builder = wire_audio_codec(builder, ac, &target_audio_codec)?;
+        let audio_bitrate = match args.audio_bitrate {
+            Some(s) => parse_bitrate(s)?,
+            None => 128_000,
+        };
+        builder = wire_audio_codec(builder, ac, &target_audio_codec, audio_bitrate)?;
     }
 
     // Add volume filter to all transcoded audio tracks if --volume was specified

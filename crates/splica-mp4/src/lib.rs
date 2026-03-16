@@ -12,9 +12,9 @@ pub(crate) mod fmp4_box_builders;
 pub mod fmp4_muxer;
 pub(crate) mod mux_sample_table;
 pub mod muxer;
-pub(crate) mod track_parsing;
 pub mod sample_table;
 pub(crate) mod track;
+pub(crate) mod track_parsing;
 
 pub use demuxer::Mp4Demuxer;
 pub use error::Mp4Error;

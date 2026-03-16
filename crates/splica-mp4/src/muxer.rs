@@ -14,8 +14,7 @@ use splica_core::{
 
 use crate::box_builders::{
     build_dinf, build_hdlr, build_mdhd, build_mvhd, build_nmhd, build_smhd, build_stsd, build_tkhd,
-    build_vmhd,
-    io_err, make_box,
+    build_vmhd, io_err, make_box,
 };
 use crate::boxes::hdlr::HandlerType;
 use crate::boxes::stsd::CodecConfig;
@@ -416,4 +415,3 @@ impl<W: Write + Seek> Muxer for Mp4Muxer<W> {
         self.finalize_file()
     }
 }
-

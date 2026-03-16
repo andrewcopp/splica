@@ -10,8 +10,7 @@ use std::ptr;
 
 use kvazaar_sys::{collect_chunks, kvz_api, kvz_config, kvz_data_chunk, kvz_encoder};
 use splica_core::media::{
-    ColorPrimaries, ColorRange, ColorSpace, MatrixCoefficients, TransferCharacteristics,
-    VideoFrame,
+    ColorPrimaries, ColorRange, ColorSpace, MatrixCoefficients, TransferCharacteristics, VideoFrame,
 };
 
 use crate::error::CodecError;
@@ -95,7 +94,12 @@ fn apply_encoding_config(
     set_config_option(config_parse, cfg, "height", &params.height.to_string())?;
 
     if params.bitrate_bps > 0 {
-        set_config_option(config_parse, cfg, "bitrate", &params.bitrate_bps.to_string())?;
+        set_config_option(
+            config_parse,
+            cfg,
+            "bitrate",
+            &params.bitrate_bps.to_string(),
+        )?;
         set_config_option(config_parse, cfg, "rc-algorithm", "oba")?;
     } else {
         set_config_option(config_parse, cfg, "qp", &params.qp.to_string())?;

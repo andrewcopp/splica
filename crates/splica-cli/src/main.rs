@@ -93,6 +93,11 @@ enum Commands {
         #[arg(long)]
         audio_codec: Option<AudioCodecArg>,
 
+        /// Target audio bitrate (e.g., "128k", "256k", "192000").
+        /// Default: 128kbps. Only applies when audio is re-encoded.
+        #[arg(long)]
+        audio_bitrate: Option<String>,
+
         /// Allow re-encoding when the input has non-standard color space metadata
         /// (e.g., HDR/BT.2020). Without this flag, splica will error rather than
         /// silently losing color information.
@@ -248,6 +253,7 @@ fn main() -> Result<()> {
             volume,
             codec,
             audio_codec,
+            audio_bitrate,
             allow_color_conversion,
             format,
         } => commands::process::process(
@@ -264,6 +270,7 @@ fn main() -> Result<()> {
                 volume: volume.as_deref(),
                 codec: codec.as_ref(),
                 audio_codec: audio_codec.as_ref(),
+                audio_bitrate: audio_bitrate.as_deref(),
                 allow_color_conversion,
             },
             &format,
@@ -306,6 +313,7 @@ fn main() -> Result<()> {
                     volume: None,
                     codec: None,
                     audio_codec: None,
+                    audio_bitrate: None,
                     allow_color_conversion: false,
                 },
                 &OutputFormat::Text,
@@ -336,6 +344,7 @@ fn main() -> Result<()> {
                     volume: None,
                     codec: None,
                     audio_codec: None,
+                    audio_bitrate: None,
                     allow_color_conversion: false,
                 },
                 &format,
