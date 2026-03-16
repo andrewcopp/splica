@@ -498,22 +498,8 @@ mod tests {
 }
 
 // ---------------------------------------------------------------------------
-// Muxer-specific helpers (ftyp, sample table boxes, timestamp rescaling)
+// Muxer-specific helpers (ftyp, sample table boxes)
 // ---------------------------------------------------------------------------
-
-/// Rescales a `Timestamp` to the target timescale.
-///
-/// If the timestamp's native timebase already matches `target_timescale`,
-/// the tick value is returned as-is. Otherwise the ticks are converted
-/// using 128-bit intermediate arithmetic to avoid overflow.
-pub(crate) fn rescale_timestamp(ts: Timestamp, target_timescale: u32) -> i64 {
-    if ts.timebase() == target_timescale {
-        return ts.ticks();
-    }
-    ts.rescale(target_timescale)
-        .map(|t| t.ticks())
-        .unwrap_or(ts.ticks())
-}
 
 pub(crate) fn build_ftyp() -> Vec<u8> {
     let mut body = Vec::new();
