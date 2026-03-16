@@ -8,6 +8,7 @@ pub mod boxes;
 pub(crate) mod codec_strings;
 pub mod demuxer;
 pub mod error;
+pub(crate) mod fmp4_box_builders;
 pub mod fmp4_muxer;
 pub(crate) mod mux_sample_table;
 pub mod muxer;
