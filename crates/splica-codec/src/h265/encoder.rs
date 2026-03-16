@@ -4,22 +4,24 @@
 //! Every unsafe block has a `// SAFETY:` comment explaining the invariant.
 
 use std::any::Any;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
+use std::ffi::CString;
 use std::ptr;
 
 use bytes::Bytes;
 use splica_core::error::EncodeError;
-use splica_core::media::{ColorSpace, Frame, Packet, PixelFormat, QualityTarget, TrackIndex};
+use splica_core::media::{
+    ColorPrimaries, ColorRange, ColorSpace, Frame, MatrixCoefficients, Packet, PixelFormat,
+    QualityTarget, TrackIndex, TransferCharacteristics, VideoFrame,
+};
 use splica_core::Encoder;
 
 use kvazaar_sys::{
-    collect_chunks, kvz_api, kvz_api_get, kvz_chroma_format, kvz_data_chunk, kvz_encoder,
-    kvz_frame_info, kvz_nal_unit_type, kvz_picture,
+    collect_chunks, kvz_api, kvz_api_get, kvz_chroma_format, kvz_config, kvz_data_chunk,
+    kvz_encoder, kvz_frame_info, kvz_nal_unit_type, kvz_picture,
 };
 
 use crate::error::CodecError;
-
-use super::sps::{copy_plane, open_configured_encoder, KvzConfigParams};
 
 /// H.265 encoder wrapping kvazaar.
 ///
@@ -32,6 +34,10 @@ pub struct H265Encoder {
     track_index: TrackIndex,
     /// Buffered encoded packets from the last send_frame call.
     pending_packets: VecDeque<Packet>,
+    /// Map from picture order count (poc) to original input PTS.
+    pts_by_poc: HashMap<i32, splica_core::Timestamp>,
+    /// Last PTS assigned to an output packet, used as fallback during flush.
+    last_pts: Option<splica_core::Timestamp>,
     /// Frame counter for PTS tracking.
     frame_count: u64,
     /// Whether end-of-stream has been signaled.
@@ -58,7 +64,6 @@ pub struct H265EncoderConfig {
 }
 
 /// Builder for creating an `H265Encoder` with specific settings.
-#[must_use]
 pub struct H265EncoderBuilder {
     bitrate_bps: u32,
     qp: u8,
@@ -148,16 +153,110 @@ impl H265EncoderBuilder {
         // SAFETY: api is non-null and points to a static kvz_api struct.
         let api = unsafe { &*api };
 
-        let params = KvzConfigParams {
-            width: self.width,
-            height: self.height,
-            bitrate_bps: self.bitrate_bps,
-            qp: self.qp,
-            max_frame_rate: self.max_frame_rate,
-            color_space: self.color_space.as_ref(),
-        };
+        // Allocate and initialize config
+        let config_alloc = api.config_alloc.ok_or_else(|| CodecError::EncoderError {
+            message: "kvazaar API missing config_alloc".to_string(),
+        })?;
+        let config_init = api.config_init.ok_or_else(|| CodecError::EncoderError {
+            message: "kvazaar API missing config_init".to_string(),
+        })?;
+        let config_parse = api.config_parse.ok_or_else(|| CodecError::EncoderError {
+            message: "kvazaar API missing config_parse".to_string(),
+        })?;
 
-        let (encoder, header_data) = open_configured_encoder(api, &params)?;
+        // SAFETY: config_alloc returns a heap-allocated kvz_config or null.
+        let cfg = unsafe { config_alloc() };
+        if cfg.is_null() {
+            return Err(CodecError::EncoderError {
+                message: "kvazaar config_alloc returned null".to_string(),
+            });
+        }
+        // SAFETY: cfg is a valid, non-null kvz_config pointer from config_alloc.
+        let ok = unsafe { config_init(cfg) };
+        if ok == 0 {
+            // SAFETY: cfg was allocated by config_alloc, safe to destroy.
+            unsafe { api.config_destroy.map(|f| f(cfg)) };
+            return Err(CodecError::EncoderError {
+                message: "kvazaar config_init failed".to_string(),
+            });
+        }
+
+        // Set dimensions, QP, and rate control via config_parse
+        set_config_option(config_parse, cfg, "width", &self.width.to_string())?;
+        set_config_option(config_parse, cfg, "height", &self.height.to_string())?;
+
+        if self.bitrate_bps > 0 {
+            set_config_option(config_parse, cfg, "bitrate", &self.bitrate_bps.to_string())?;
+            set_config_option(config_parse, cfg, "rc-algorithm", "oba")?;
+        } else {
+            set_config_option(config_parse, cfg, "qp", &self.qp.to_string())?;
+        }
+
+        // Set intra period for keyframe interval (must be a multiple of B-gop length 16)
+        set_config_option(config_parse, cfg, "period", "64")?;
+        // Emit VPS/SPS/PPS with every intra frame
+        set_config_option(config_parse, cfg, "vps-period", "1")?;
+
+        if let Some(fps) = self.max_frame_rate {
+            let fps_int = fps.round() as u32;
+            if fps_int > 0 {
+                set_config_option(config_parse, cfg, "input-fps", &fps_int.to_string())?;
+            }
+        }
+
+        // Set VUI color space parameters
+        if let Some(cs) = &self.color_space {
+            let prim = color_primaries_to_itu(cs.primaries);
+            let transfer = transfer_characteristics_to_itu(cs.transfer);
+            let matrix = matrix_coefficients_to_itu(cs.matrix);
+            let range = match cs.range {
+                ColorRange::Full => "full",
+                ColorRange::Limited => "limited",
+            };
+
+            set_config_option(config_parse, cfg, "colorprim", &prim.to_string())?;
+            set_config_option(config_parse, cfg, "transfer", &transfer.to_string())?;
+            set_config_option(config_parse, cfg, "colormatrix", &matrix.to_string())?;
+            set_config_option(config_parse, cfg, "range", range)?;
+        }
+
+        // Open encoder
+        let encoder_open = api.encoder_open.ok_or_else(|| CodecError::EncoderError {
+            message: "kvazaar API missing encoder_open".to_string(),
+        })?;
+        // SAFETY: cfg is a valid, fully configured kvz_config pointer.
+        let encoder = unsafe { encoder_open(cfg) };
+
+        // Config is consumed by encoder_open; we no longer own it.
+        // (kvazaar copies the config internally, but we don't destroy it
+        // here — kvazaar manages its own copy.)
+        // SAFETY: cfg was allocated by config_alloc. We destroy our copy now
+        // since encoder_open has copied it.
+        unsafe { api.config_destroy.map(|f| f(cfg)) };
+
+        if encoder.is_null() {
+            return Err(CodecError::EncoderError {
+                message: "kvazaar encoder_open returned null".to_string(),
+            });
+        }
+
+        // Get header data (VPS/SPS/PPS)
+        let mut header_data = Vec::new();
+        if let Some(encoder_headers) = api.encoder_headers {
+            let mut data_out: *mut kvz_data_chunk = ptr::null_mut();
+            let mut len_out: u32 = 0;
+            // SAFETY: encoder is a valid, non-null kvz_encoder pointer.
+            // data_out and len_out are valid mutable references.
+            let ok = unsafe { encoder_headers(encoder, &mut data_out, &mut len_out) };
+            if ok != 0 && !data_out.is_null() {
+                // SAFETY: data_out is a valid kvz_data_chunk chain from encoder_headers.
+                header_data = unsafe { collect_chunks(data_out) };
+                // SAFETY: data_out was allocated by kvazaar; chunk_free releases it.
+                if let Some(chunk_free) = api.chunk_free {
+                    unsafe { chunk_free(data_out) };
+                }
+            }
+        }
 
         Ok(H265Encoder {
             api,
@@ -170,6 +269,8 @@ impl H265EncoderBuilder {
             },
             track_index: self.track_index,
             pending_packets: VecDeque::new(),
+            pts_by_poc: HashMap::new(),
+            last_pts: None,
             frame_count: 0,
             flushing: false,
             header_data,
@@ -270,16 +371,19 @@ impl H265Encoder {
                 self.header_sent = true;
             }
 
-            // Use picture order count (poc) for PTS reconstruction
-            let pts_ticks = info_out.poc as i64;
-
-            // Use poc as the basis for pts (in encoder timebase units)
-            let timebase = self
-                .max_frame_rate
-                .map(|fps| fps.round() as u32)
-                .unwrap_or(30);
-            let pts = splica_core::Timestamp::new(pts_ticks, timebase)
-                .unwrap_or_else(|| splica_core::Timestamp::new(0, 1).unwrap());
+            // Look up the original input PTS by poc instead of reconstructing
+            let pts = if let Some(original_pts) = self.pts_by_poc.remove(&info_out.poc) {
+                self.last_pts = Some(original_pts);
+                original_pts
+            } else if let Some(last) = self.last_pts {
+                // Fallback during flush: increment from last known PTS
+                let next =
+                    splica_core::Timestamp::new(last.ticks() + 1, last.timebase()).unwrap_or(last);
+                self.last_pts = Some(next);
+                next
+            } else {
+                splica_core::Timestamp::new(0, 1).unwrap()
+            };
 
             let packet = Packet {
                 track_index: self.track_index,
@@ -377,6 +481,8 @@ impl Encoder for H265Encoder {
                     p.pts = video_frame.pts.ticks();
                 }
 
+                self.pts_by_poc
+                    .insert(self.frame_count as i32, video_frame.pts);
                 let result = self.encode_frame(pic);
 
                 // Free the input picture
@@ -436,10 +542,88 @@ impl Drop for H265Encoder {
 // is a static immutable struct. The encoder pointer is only used from &mut self.
 unsafe impl Send for H265Encoder {}
 
+/// Copies one plane from a VideoFrame to a kvazaar picture buffer.
+///
+/// # Safety
+///
+/// `dst` must point to a buffer with at least `dst_stride * height` bytes.
+unsafe fn copy_plane(
+    frame: &VideoFrame,
+    plane_idx: usize,
+    dst: *mut u8,
+    dst_stride: usize,
+    width: usize,
+    height: usize,
+) {
+    let plane = &frame.planes[plane_idx];
+    let src = &frame.data[plane.offset..];
+    for row in 0..height {
+        let src_row = &src[row * plane.stride..row * plane.stride + width];
+        // SAFETY: dst is a valid kvazaar plane buffer. We write exactly
+        // `width` bytes at offset `row * dst_stride`, which is within bounds
+        // of the allocated plane.
+        unsafe {
+            ptr::copy_nonoverlapping(src_row.as_ptr(), dst.add(row * dst_stride), width);
+        }
+    }
+}
+
+/// Helper to call config_parse and convert errors.
+fn set_config_option(
+    config_parse: unsafe extern "C" fn(*mut kvz_config, *const i8, *const i8) -> i32,
+    cfg: *mut kvz_config,
+    name: &str,
+    value: &str,
+) -> Result<(), CodecError> {
+    let c_name = CString::new(name).map_err(|_| CodecError::InvalidConfig {
+        message: format!("invalid config name: {name}"),
+    })?;
+    let c_value = CString::new(value).map_err(|_| CodecError::InvalidConfig {
+        message: format!("invalid config value: {value}"),
+    })?;
+    // SAFETY: cfg is a valid kvz_config pointer. c_name and c_value are
+    // valid null-terminated C strings.
+    let ok = unsafe { config_parse(cfg, c_name.as_ptr(), c_value.as_ptr()) };
+    if ok == 0 {
+        return Err(CodecError::InvalidConfig {
+            message: format!("kvazaar rejected config {name}={value}"),
+        });
+    }
+    Ok(())
+}
+
+/// Maps splica ColorPrimaries to ITU-T H.265 colour_primaries value.
+fn color_primaries_to_itu(p: ColorPrimaries) -> u8 {
+    match p {
+        ColorPrimaries::Bt709 => 1,
+        ColorPrimaries::Bt2020 => 9,
+        ColorPrimaries::Smpte432 => 12,
+    }
+}
+
+/// Maps splica TransferCharacteristics to ITU-T H.265 transfer_characteristics value.
+fn transfer_characteristics_to_itu(t: TransferCharacteristics) -> u8 {
+    match t {
+        TransferCharacteristics::Bt709 => 1,
+        TransferCharacteristics::Smpte2084 => 16,
+        TransferCharacteristics::HybridLogGamma => 18,
+    }
+}
+
+/// Maps splica MatrixCoefficients to ITU-T H.265 matrix_coefficients value.
+fn matrix_coefficients_to_itu(m: MatrixCoefficients) -> u8 {
+    match m {
+        MatrixCoefficients::Identity => 0,
+        MatrixCoefficients::Bt709 => 1,
+        MatrixCoefficients::Bt2020NonConstant => 9,
+        MatrixCoefficients::Bt2020Constant => 10,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use splica_core::media::{PlaneLayout, VideoFrame};
+    use splica_core::media::PlaneLayout;
     use splica_core::Timestamp;
 
     /// Create a synthetic YUV420p VideoFrame with a solid color.

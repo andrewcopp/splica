@@ -9,19 +9,26 @@
 use std::io::{Seek, SeekFrom, Write};
 
 use splica_core::{
-    Codec, MuxError, Muxer, Packet, ResourceBudget, TrackIndex, TrackInfo, TrackKind, VideoCodec,
+    Codec, MuxError, Muxer, Packet, ResourceBudget, Timestamp, TrackIndex, TrackInfo, TrackKind,
+    VideoCodec,
 };
 
 use crate::box_builders::{
-    build_dinf, build_hdlr, build_mdhd, build_mvhd, build_nmhd, build_smhd, build_stsd, build_tkhd,
-    build_vmhd, io_err, make_box,
+    build_dinf, build_hdlr, build_mdhd, build_mvhd, build_smhd, build_stsd, build_tkhd, build_vmhd,
+    io_err, make_box, make_full_box,
 };
 use crate::boxes::hdlr::HandlerType;
 use crate::boxes::stsd::CodecConfig;
 use crate::metadata::MetadataBox;
-use crate::mux_sample_table::{
-    build_ctts, build_ftyp, build_stco, build_stsc, build_stss, build_stsz, build_stts, MuxSample,
-};
+
+/// A single sample's metadata recorded during muxing.
+struct MuxSample {
+    offset: u64,
+    size: u32,
+    dts: i64,
+    cts_offset: i32,
+    is_sync: bool,
+}
 
 /// Collected metadata for one track during muxing.
 struct MuxTrack {
@@ -177,23 +184,16 @@ impl<W: Write + Seek> Mp4Muxer<W> {
         self.bytes_written += size as u64;
         self.packets_written += 1;
 
+        // Convert packet timestamps from their native timebase to the track's timescale
         let track_timescale = self.tracks[track_idx].timescale;
-        let dts_rescaled = packet
-            .dts
-            .rescale(track_timescale)
-            .map(|t| t.ticks())
-            .unwrap_or(packet.dts.ticks());
-        let pts_rescaled = packet
-            .pts
-            .rescale(track_timescale)
-            .map(|t| t.ticks())
-            .unwrap_or(packet.pts.ticks());
-        let cts_offset = (pts_rescaled - dts_rescaled) as i32;
+        let dts_ticks = rescale_timestamp(packet.dts, track_timescale);
+        let pts_ticks = rescale_timestamp(packet.pts, track_timescale);
+        let cts_offset = (pts_ticks - dts_ticks) as i32;
 
         self.tracks[track_idx].samples.push(MuxSample {
             offset,
             size,
-            dts: dts_rescaled,
+            dts: dts_ticks,
             cts_offset,
             is_sync: packet.is_keyframe,
         });
@@ -311,10 +311,10 @@ impl<W: Write + Seek> Mp4Muxer<W> {
         };
 
         let mdhd = build_mdhd(track.timescale, media_duration);
-        let handler = match track.track_info.kind {
-            TrackKind::Video => HandlerType::Video,
-            TrackKind::Audio => HandlerType::Audio,
-            TrackKind::Subtitle => HandlerType::Subtitle,
+        let handler = if track.track_info.kind == TrackKind::Video {
+            HandlerType::Video
+        } else {
+            HandlerType::Audio
         };
         let hdlr = build_hdlr(handler);
 
@@ -341,10 +341,10 @@ impl<W: Write + Seek> Mp4Muxer<W> {
         let stbl = make_box(b"stbl", &stbl_body);
 
         // media info header
-        let xmhd = match track.track_info.kind {
-            TrackKind::Video => build_vmhd(),
-            TrackKind::Audio => build_smhd(),
-            TrackKind::Subtitle => build_nmhd(),
+        let xmhd = if track.track_info.kind == TrackKind::Video {
+            build_vmhd()
+        } else {
+            build_smhd()
         };
         let dinf = build_dinf();
         let mut minf_body = xmhd;
@@ -390,13 +390,9 @@ impl<W: Write + Seek> Muxer for Mp4Muxer<W> {
                 channel_count: 2,
                 esds: bytes::Bytes::new(),
             },
-            (TrackKind::Subtitle, _, _) => {
-                // Subtitle tracks use a generic Unknown config for passthrough
-                CodecConfig::Unknown(info.codec.to_string())
-            }
             _ => {
                 return Err(MuxError::InvalidTrackConfig {
-                    message: "track must have video, audio, or subtitle metadata".to_string(),
+                    message: "track must have video or audio metadata".to_string(),
                 })
             }
         };
@@ -414,4 +410,151 @@ impl<W: Write + Seek> Muxer for Mp4Muxer<W> {
     fn finalize(&mut self) -> Result<(), MuxError> {
         self.finalize_file()
     }
+}
+
+/// Rescales a `Timestamp` to the target timescale.
+///
+/// If the timestamp's native timebase already matches `target_timescale`,
+/// the tick value is returned as-is. Otherwise the ticks are converted
+/// using 128-bit intermediate arithmetic to avoid overflow.
+fn rescale_timestamp(ts: Timestamp, target_timescale: u32) -> i64 {
+    if ts.timebase() == target_timescale {
+        return ts.ticks();
+    }
+    ts.rescale(target_timescale)
+        .map(|t| t.ticks())
+        .unwrap_or(ts.ticks())
+}
+
+// ---------------------------------------------------------------------------
+// Muxer-specific helpers (ftyp, sample table boxes)
+// ---------------------------------------------------------------------------
+
+fn build_ftyp() -> Vec<u8> {
+    let mut body = Vec::new();
+    body.extend_from_slice(b"isom"); // major brand
+    body.extend_from_slice(&0u32.to_be_bytes()); // minor version
+    body.extend_from_slice(b"isom"); // compatible brands
+    body.extend_from_slice(b"iso2");
+    body.extend_from_slice(b"mp41");
+    make_box(b"ftyp", &body)
+}
+
+fn build_stts(samples: &[MuxSample]) -> Vec<u8> {
+    if samples.is_empty() {
+        let mut body = vec![0, 0, 0, 0]; // version+flags
+        body.extend_from_slice(&0u32.to_be_bytes());
+        return make_full_box(b"stts", &body);
+    }
+
+    // Compute deltas and run-length encode
+    let mut entries: Vec<(u32, u32)> = Vec::new(); // (count, delta)
+    for i in 0..samples.len() {
+        let delta = if i + 1 < samples.len() {
+            (samples[i + 1].dts - samples[i].dts) as u32
+        } else if !entries.is_empty() {
+            entries.last().unwrap().1 // repeat last delta
+        } else {
+            1
+        };
+
+        if let Some(last) = entries.last_mut() {
+            if last.1 == delta {
+                last.0 += 1;
+                continue;
+            }
+        }
+        entries.push((1, delta));
+    }
+
+    let mut body = vec![0, 0, 0, 0]; // version+flags
+    body.extend_from_slice(&(entries.len() as u32).to_be_bytes());
+    for (count, delta) in &entries {
+        body.extend_from_slice(&count.to_be_bytes());
+        body.extend_from_slice(&delta.to_be_bytes());
+    }
+    make_full_box(b"stts", &body)
+}
+
+fn build_ctts(samples: &[MuxSample]) -> Option<Vec<u8>> {
+    // Only needed if any sample has non-zero CTS offset
+    if samples.iter().all(|s| s.cts_offset == 0) {
+        return None;
+    }
+
+    let mut entries: Vec<(u32, i32)> = Vec::new();
+    for sample in samples {
+        if let Some(last) = entries.last_mut() {
+            if last.1 == sample.cts_offset {
+                last.0 += 1;
+                continue;
+            }
+        }
+        entries.push((1, sample.cts_offset));
+    }
+
+    // Use version 1 for signed offsets
+    let mut body = Vec::new();
+    body.extend_from_slice(&[0, 0, 0, 0]); // version=0, flags=0
+    body.extend_from_slice(&(entries.len() as u32).to_be_bytes());
+    for (count, offset) in &entries {
+        body.extend_from_slice(&count.to_be_bytes());
+        body.extend_from_slice(&(*offset as u32).to_be_bytes());
+    }
+    Some(make_full_box(b"ctts", &body))
+}
+
+fn build_stsc(sample_count: u32) -> Vec<u8> {
+    // Simple: one chunk per sample
+    let mut body = vec![0, 0, 0, 0]; // version+flags
+    if sample_count > 0 {
+        body.extend_from_slice(&1u32.to_be_bytes()); // entry_count
+        body.extend_from_slice(&1u32.to_be_bytes()); // first_chunk
+        body.extend_from_slice(&1u32.to_be_bytes()); // samples_per_chunk
+        body.extend_from_slice(&1u32.to_be_bytes()); // sample_description_index
+    } else {
+        body.extend_from_slice(&0u32.to_be_bytes());
+    }
+    make_full_box(b"stsc", &body)
+}
+
+fn build_stsz(samples: &[MuxSample]) -> Vec<u8> {
+    let mut body = vec![0, 0, 0, 0]; // version+flags
+    body.extend_from_slice(&0u32.to_be_bytes()); // sample_size (0 = variable)
+    body.extend_from_slice(&(samples.len() as u32).to_be_bytes());
+    for sample in samples {
+        body.extend_from_slice(&sample.size.to_be_bytes());
+    }
+    make_full_box(b"stsz", &body)
+}
+
+fn build_stco(samples: &[MuxSample]) -> Vec<u8> {
+    // Use co64 for safety (64-bit offsets)
+    let mut body = vec![0, 0, 0, 0]; // version+flags
+    body.extend_from_slice(&(samples.len() as u32).to_be_bytes());
+    for sample in samples {
+        body.extend_from_slice(&sample.offset.to_be_bytes());
+    }
+    make_full_box(b"co64", &body)
+}
+
+fn build_stss(samples: &[MuxSample]) -> Option<Vec<u8>> {
+    let keyframes: Vec<u32> = samples
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s.is_sync)
+        .map(|(i, _)| i as u32 + 1) // 1-based
+        .collect();
+
+    // If all samples are keyframes, stss is not needed
+    if keyframes.len() == samples.len() {
+        return None;
+    }
+
+    let mut body = vec![0, 0, 0, 0]; // version+flags
+    body.extend_from_slice(&(keyframes.len() as u32).to_be_bytes());
+    for kf in &keyframes {
+        body.extend_from_slice(&kf.to_be_bytes());
+    }
+    Some(make_full_box(b"stss", &body))
 }
