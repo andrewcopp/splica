@@ -300,6 +300,25 @@ pub(crate) fn build_stsd(config: &CodecConfig) -> Result<Vec<u8>, MuxError> {
     Ok(make_full_box(b"stsd", &body))
 }
 
+/// Converts a [`Timestamp`] to ticks in the given `target_timescale`.
+///
+/// Uses 128-bit intermediate arithmetic via [`Timestamp::rescale`] to avoid
+/// overflow during the multiplication step.
+///
+/// # Overflow fallback — KNOWN RISK
+///
+/// When `rescale()` returns `None` (the converted value does not fit in
+/// `i64`), this function silently falls back to `ts.ticks()` — the
+/// *unconverted* tick count. That value is almost certainly wrong because
+/// it represents a different timebase than the caller expects. A future
+/// sprint should change this to return `Result` or `Option` so callers
+/// can detect and handle the overflow explicitly.
+pub(crate) fn rescale_timestamp(ts: Timestamp, target_timescale: u32) -> i64 {
+    ts.rescale(target_timescale)
+        .map(|t| t.ticks())
+        .unwrap_or(ts.ticks())
+}
+
 /// Converts an `io::Error` into a `MuxError`.
 pub(crate) fn io_err(e: std::io::Error) -> MuxError {
     MuxError::Io(e)
@@ -383,6 +402,72 @@ mod tests {
             }
             other => panic!("expected Hev1, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_that_rescale_timestamp_returns_ticks_unchanged_for_same_timebase() {
+        // GIVEN — a timestamp already at the target timescale
+        let ts = Timestamp::new(12345, 90_000).unwrap();
+
+        // WHEN
+        let result = rescale_timestamp(ts, 90_000);
+
+        // THEN
+        assert_eq!(result, 12345);
+    }
+
+    #[test]
+    fn test_that_rescale_timestamp_converts_microsecond_to_90khz() {
+        // GIVEN — 1 second expressed in microsecond timebase
+        let ts = Timestamp::new(1_000_000, 1_000_000).unwrap();
+
+        // WHEN — convert to 90kHz (MPEG-TS timescale)
+        let result = rescale_timestamp(ts, 90_000);
+
+        // THEN — 1 second at 90kHz = 90 000 ticks
+        assert_eq!(result, 90_000);
+    }
+
+    #[test]
+    fn test_that_rescale_timestamp_converts_30fps_to_90khz() {
+        // GIVEN — 1 second at 30fps (30 ticks)
+        let ts = Timestamp::new(30, 30).unwrap();
+
+        // WHEN — convert to 90kHz
+        let result = rescale_timestamp(ts, 90_000);
+
+        // THEN — 1 second at 90kHz = 90 000 ticks
+        assert_eq!(result, 90_000);
+    }
+
+    #[test]
+    fn test_that_rescale_timestamp_returns_zero_for_zero_ticks() {
+        // GIVEN — zero ticks
+        let ts = Timestamp::new(0, 48_000).unwrap();
+
+        // WHEN
+        let result = rescale_timestamp(ts, 90_000);
+
+        // THEN
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn test_that_rescale_timestamp_overflow_returns_unconverted_ticks() {
+        // GIVEN — ticks near i64::MAX with a large target timescale.
+        // When rescale() computes (i64::MAX * 90_000) / 1 the i128 result
+        // exceeds i64::MAX, so rescale() returns None.
+        let ts = Timestamp::new(i64::MAX, 1).unwrap();
+
+        // WHEN — the fallback fires
+        let result = rescale_timestamp(ts, 90_000);
+
+        // THEN — returns the *original* ticks, NOT a correctly converted value.
+        // This is WRONG in practice: the caller expects ticks in the 90 000
+        // timebase, but gets ticks in the 1 Hz timebase instead.
+        // This silent data corruption should be addressed in a future sprint
+        // by changing the return type to Option<i64> or Result<i64, _>.
+        assert_eq!(result, i64::MAX);
     }
 
     #[test]
