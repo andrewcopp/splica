@@ -194,6 +194,18 @@ pub(super) fn reencode(args: &ProcessArgs<'_>, json_mode: bool) -> Result<Transc
 
     // Re-encode path: we need video tracks with supported codec config to decode+encode
     if video_track_configs.is_empty() {
+        // Check if the input has VP9 tracks — give a specific, actionable error.
+        let has_vp9 = demuxer
+            .tracks()
+            .iter()
+            .any(|t| matches!(&t.codec, Codec::Video(VideoCodec::Other(s)) if s == "VP9"));
+        if has_vp9 {
+            return Err(miette::miette!(
+                "VP9 video re-encoding is not supported — splica can decode VP9 for passthrough \
+                 but cannot re-encode it. Use --codec h264 or --codec av1 to transcode to a \
+                 supported codec."
+            ));
+        }
         return Err(miette::miette!(
             "no supported video tracks found in '{}' — re-encoding supports H.264, H.265, and AV1",
             args.input.display()

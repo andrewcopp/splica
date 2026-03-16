@@ -314,8 +314,8 @@ fn test_that_process_of_vp9_with_resize_produces_clear_error() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let combined = format!("{stderr}{stdout}");
     assert!(
-        combined.contains("error") || combined.contains("Error") || combined.contains("H.264"),
-        "expected error message about H.264, got: {combined}"
+        combined.contains("VP9 video re-encoding is not supported"),
+        "expected VP9 unsupported-codec error, got: {combined}"
     );
 }
 
