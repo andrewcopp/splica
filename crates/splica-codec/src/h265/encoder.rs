@@ -60,6 +60,7 @@ pub struct H265EncoderConfig {
 }
 
 /// Builder for creating an `H265Encoder` with specific settings.
+#[must_use]
 pub struct H265EncoderBuilder {
     bitrate_bps: u32,
     qp: u8,

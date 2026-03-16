@@ -40,6 +40,7 @@ pub struct AacEncoder {
 }
 
 /// Builder for creating an `AacEncoder` with specific settings.
+#[must_use]
 pub struct AacEncoderBuilder {
     bitrate_bps: u32,
     sample_rate: u32,

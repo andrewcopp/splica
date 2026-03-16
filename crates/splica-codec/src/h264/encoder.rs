@@ -74,6 +74,7 @@ pub enum H264EncoderLevel {
 }
 
 /// Builder for creating an `H264Encoder` with specific settings.
+#[must_use]
 pub struct H264EncoderBuilder {
     bitrate_bps: u32,
     profile: Option<H264EncoderProfile>,

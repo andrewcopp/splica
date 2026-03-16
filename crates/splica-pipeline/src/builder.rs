@@ -74,6 +74,7 @@ pub(crate) enum TrackMode {
 ///     }
 /// });
 /// ```
+#[must_use]
 pub struct PipelineBuilder {
     pub(crate) on_event: Option<Box<dyn Fn(PipelineEvent)>>,
     pub(crate) demuxer: Option<Box<dyn Demuxer>>,

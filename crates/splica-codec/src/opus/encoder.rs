@@ -38,6 +38,7 @@ pub struct OpusEncoder {
 }
 
 /// Builder for creating an `OpusEncoder` with specific settings.
+#[must_use]
 pub struct OpusEncoderBuilder {
     bitrate_bps: u32,
     sample_rate: u32,

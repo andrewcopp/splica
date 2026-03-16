@@ -50,6 +50,7 @@ pub struct Av1EncoderConfig {
 }
 
 /// Builder for creating an `Av1Encoder` with specific settings.
+#[must_use]
 pub struct Av1EncoderBuilder {
     bitrate_bps: u32,
     quantizer: u8,
