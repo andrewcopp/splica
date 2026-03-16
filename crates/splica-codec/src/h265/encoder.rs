@@ -327,6 +327,17 @@ impl H265Encoder {
             .into());
         }
 
+        // Read the original PTS from src_out before freeing it.
+        // Kvazaar echoes back the input kvz_picture as src_out, preserving
+        // the pts field we set during send_frame. This avoids relying on
+        // info_out.poc matching the frame submission index.
+        let src_pts = if !src_out.is_null() {
+            // SAFETY: src_out is a valid kvz_picture returned by encoder_encode.
+            Some(unsafe { (*src_out).pts })
+        } else {
+            None
+        };
+
         // Free reconstructed and source pictures if returned
         if let Some(picture_free) = self.api.picture_free {
             if !pic_out.is_null() {
@@ -365,10 +376,11 @@ impl H265Encoder {
                 self.header_sent = true;
             }
 
-            // Use picture order count (poc) for PTS reconstruction
-            let pts_ticks = info_out.poc as i64;
+            // Use the original input PTS echoed back via src_out, falling
+            // back to poc-based PTS only if src_out was null (shouldn't
+            // happen when encoder produces output).
+            let pts_ticks = src_pts.unwrap_or(info_out.poc as i64);
 
-            // Use poc as the basis for pts (in encoder timebase units)
             let timebase = self
                 .max_frame_rate
                 .map(|fps| fps.round() as u32)
