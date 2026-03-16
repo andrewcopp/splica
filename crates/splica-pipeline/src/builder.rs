@@ -97,7 +97,27 @@ impl Default for PipelineBuilder {
 }
 
 impl PipelineBuilder {
-    /// Creates a new pipeline builder with no event callback.
+    /// Creates a new pipeline builder with no components configured.
+    ///
+    /// The builder starts empty. At minimum, you must provide a demuxer
+    /// (via [`with_demuxer()`](Self::with_demuxer)) and a muxer (via
+    /// [`with_muxer()`](Self::with_muxer)) before calling
+    /// [`build()`](Self::build). Tracks without explicit decoder/encoder
+    /// pairs default to copy mode (compressed packets pass through
+    /// untouched).
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use splica_pipeline::PipelineBuilder;
+    ///
+    /// // Copy mode: remux without transcoding
+    /// let mut pipeline = PipelineBuilder::new()
+    ///     .with_demuxer(my_demuxer)
+    ///     .with_muxer(my_muxer)
+    ///     .build()?;
+    /// pipeline.run()?;
+    /// ```
     pub fn new() -> Self {
         Self {
             on_event: None,
@@ -116,18 +136,86 @@ impl PipelineBuilder {
     }
 
     /// Sets a callback that receives pipeline events for progress reporting.
+    ///
+    /// The handler is called synchronously on the pipeline's thread as each
+    /// event occurs. Keep the callback fast to avoid stalling the pipeline.
+    /// For heavy work (e.g., database writes), send events to a channel and
+    /// process them on a separate thread.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use splica_pipeline::{PipelineBuilder, PipelineEvent, PipelineEventKind};
+    /// use std::sync::{Arc, Mutex};
+    ///
+    /// let packets_read = Arc::new(Mutex::new(0u64));
+    /// let counter = Arc::clone(&packets_read);
+    ///
+    /// let builder = PipelineBuilder::new()
+    ///     .with_event_handler(move |event: PipelineEvent| {
+    ///         if let PipelineEventKind::PacketsRead { count } = event.kind {
+    ///             *counter.lock().unwrap() = count;
+    ///         }
+    ///     });
+    /// ```
     pub fn with_event_handler(mut self, handler: impl Fn(PipelineEvent) + 'static) -> Self {
         self.on_event = Some(Box::new(handler));
         self
     }
 
     /// Sets the demuxer (input source).
+    ///
+    /// Accepts any type that implements [`Demuxer`], including custom
+    /// implementations. The demuxer is consumed and stored as a trait
+    /// object, so you can swap container formats (MP4, WebM, MKV) or
+    /// use in-memory sources without changing the pipeline setup.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use splica_mp4::Mp4Demuxer;
+    /// use std::fs::File;
+    /// use std::io::BufReader;
+    ///
+    /// // File-based MP4 input
+    /// let file = BufReader::new(File::open("input.mp4")?);
+    /// let demuxer = Mp4Demuxer::open(file)?;
+    ///
+    /// let builder = PipelineBuilder::new().with_demuxer(demuxer);
+    /// ```
+    ///
+    /// ```ignore
+    /// use std::io::Cursor;
+    ///
+    /// // In-memory input with a custom demuxer
+    /// let data = Cursor::new(raw_bytes);
+    /// let demuxer = MyCustomDemuxer::new(data);
+    ///
+    /// let builder = PipelineBuilder::new().with_demuxer(demuxer);
+    /// ```
     pub fn with_demuxer(mut self, demuxer: impl Demuxer + 'static) -> Self {
         self.demuxer = Some(Box::new(demuxer));
         self
     }
 
     /// Sets the muxer (output destination).
+    ///
+    /// Accepts any type that implements [`Muxer`]. Like the demuxer, the
+    /// muxer is stored as a trait object so you can target different
+    /// container formats or write to in-memory buffers.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use splica_mp4::Mp4Muxer;
+    /// use std::fs::File;
+    /// use std::io::BufWriter;
+    ///
+    /// let file = BufWriter::new(File::create("output.mp4")?);
+    /// let muxer = Mp4Muxer::new(file);
+    ///
+    /// let builder = PipelineBuilder::new().with_muxer(muxer);
+    /// ```
     pub fn with_muxer(mut self, muxer: impl Muxer + 'static) -> Self {
         self.muxer = Some(Box::new(muxer));
         self
@@ -154,6 +242,31 @@ impl PipelineBuilder {
     /// Filters are applied in order after decode and before encode.
     /// Multiple filters can be added per track by calling this multiple times.
     /// Only applies to tracks in transcode mode (with decoder + encoder).
+    ///
+    /// # Filter chain composition
+    ///
+    /// Filters execute in the order they are added. Each filter receives the
+    /// output of the previous one, forming a pipeline within the pipeline:
+    ///
+    /// ```ignore
+    /// use splica_core::TrackIndex;
+    /// use splica_filter::{ScaleFilter, CropFilter};
+    ///
+    /// let builder = PipelineBuilder::new()
+    ///     .with_demuxer(demuxer)
+    ///     .with_muxer(muxer)
+    ///     .with_decoder(TrackIndex(0), decoder)
+    ///     .with_encoder(TrackIndex(0), encoder)
+    ///     // Filters run left-to-right: scale first, then crop
+    ///     .with_filter(TrackIndex(0), ScaleFilter::new(1280, 720))
+    ///     .with_filter(TrackIndex(0), CropFilter::new(100, 50, 1080, 620));
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Adding a filter to a track without a decoder/encoder pair will cause
+    /// [`validate()`](Self::validate) (and therefore [`build()`](Self::build))
+    /// to return [`ValidationError::OrphanVideoFilter`].
     pub fn with_filter(mut self, track: TrackIndex, filter: impl VideoFilter + 'static) -> Self {
         self.filters
             .entry(track)
@@ -295,7 +408,34 @@ impl PipelineBuilder {
     /// Builds and returns a configured [`Pipeline`] ready to run.
     ///
     /// Calls [`validate()`](Self::validate) internally and returns the first
-    /// error as a `PipelineError::Validation` if validation fails.
+    /// error as a [`PipelineError::Validation`] if validation fails.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use splica_core::TrackIndex;
+    /// use splica_pipeline::PipelineBuilder;
+    ///
+    /// // Full transcode pipeline: demux → decode → filter → encode → mux
+    /// let mut pipeline = PipelineBuilder::new()
+    ///     .with_demuxer(demuxer)
+    ///     .with_decoder(TrackIndex(0), h264_decoder)
+    ///     .with_filter(TrackIndex(0), scale_filter)
+    ///     .with_encoder(TrackIndex(0), h265_encoder)
+    ///     .with_output_codec(TrackIndex(0), Codec::Video(VideoCodec::H265))
+    ///     .with_muxer(mp4_muxer)
+    ///     .build()?;
+    ///
+    /// pipeline.run()?;
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PipelineError::Validation`] if:
+    /// - No demuxer is configured
+    /// - No muxer is configured
+    /// - An encoder exists without a matching decoder (or vice versa)
+    /// - A filter exists on a track without a decoder/encoder pair
     pub fn build(mut self) -> Result<Pipeline, PipelineError> {
         let errors = self.validate();
         if let Some(err) = errors.into_iter().next() {
