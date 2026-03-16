@@ -1433,6 +1433,7 @@ dependencies = [
 name = "splica-cli"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "clap",
  "miette",
  "serde",
