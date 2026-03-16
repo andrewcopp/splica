@@ -70,7 +70,11 @@ pub(super) fn wire_video_encoder(
             .quality(quality_target)
             .track_index(vtc.track_index)
             .dimensions(enc_w, enc_h)
-            .speed(6)
+            .speed(match args.preset {
+                Some(crate::commands::EncodePreset::Fast) => 8,
+                None | Some(crate::commands::EncodePreset::Medium) => 6,
+                Some(crate::commands::EncodePreset::Slow) => 4,
+            })
             .max_frame_rate(frame_rate_hint);
 
         if let Some(cs) = vtc.color_space {
