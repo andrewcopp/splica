@@ -1,10 +1,18 @@
 #!/bin/sh
 
-# Quick formatting check before committing.
-# Full build/test/clippy runs in the pre-push hook.
+# Formatting + clippy check before committing.
+# Catches dead code, duplicate definitions, unused imports, and style issues
+# at commit time — not just at push time.
 # To enable: git config core.hooksPath .githooks
+
+set -e
 
 if ! cargo fmt --check > /dev/null 2>&1; then
     echo "error: cargo fmt check failed. Run 'cargo fmt' and stage the changes."
+    exit 1
+fi
+
+if ! cargo clippy --all-targets -- -D warnings > /dev/null 2>&1; then
+    echo "error: cargo clippy found warnings. Run 'cargo clippy --all-targets -- -D warnings' to see them."
     exit 1
 fi

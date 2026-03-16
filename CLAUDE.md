@@ -24,8 +24,19 @@ cargo clippy --all-targets           # Lint
 cargo fmt --check                    # Check formatting
 cargo fmt                            # Auto-format
 cargo bench                          # Run benchmarks
-git config core.hooksPath .githooks  # Enable pre-commit hook (one-time setup)
+git config core.hooksPath .githooks  # Enable hooks (one-time setup per clone)
 ```
+
+### Pre-commit Checklist
+
+**Before every commit**, run all three in order:
+```bash
+cargo fmt                                        # Fix formatting
+cargo clippy --all-targets -- -D warnings        # Zero warnings allowed
+cargo test                                       # All tests pass
+```
+
+The pre-commit hook enforces fmt + clippy. The pre-push hook enforces all three. Enable hooks at the start of every session: `git config core.hooksPath .githooks`
 
 ## Workspace Architecture
 
