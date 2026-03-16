@@ -127,7 +127,9 @@ fn process_inner(args: &ProcessArgs<'_>, json_mode: bool) -> Result<TranscodeOut
         || args.crop.is_some()
         || args.volume.is_some()
         || args.codec.is_some()
-        || args.audio_bitrate.is_some();
+        || args.audio_bitrate.is_some()
+        || args.h264_profile.is_some()
+        || args.h264_level.is_some();
 
     if !user_requested_reencode {
         // Check if stream copy is possible (all codecs compatible, no audio transcode needed)

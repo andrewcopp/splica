@@ -61,6 +61,40 @@ pub(crate) enum AudioCodecArg {
     Opus,
 }
 
+/// CLI argument for H.264 encoding profile.
+#[derive(Clone, ValueEnum)]
+pub(crate) enum H264ProfileArg {
+    /// Baseline profile — no B-frames, compatible with most devices.
+    Baseline,
+    /// Main profile — B-frames, good balance of quality and compatibility.
+    Main,
+    /// High profile — best quality, widely supported on modern devices.
+    High,
+}
+
+/// CLI argument for H.264 encoding level.
+#[derive(Clone, ValueEnum)]
+pub(crate) enum H264LevelArg {
+    /// Level 3.0 — up to 720x480 @ 30fps.
+    #[value(name = "3.0")]
+    L3_0,
+    /// Level 3.1 — up to 1280x720 @ 30fps.
+    #[value(name = "3.1")]
+    L3_1,
+    /// Level 4.0 — up to 1920x1080 @ 30fps.
+    #[value(name = "4.0")]
+    L4_0,
+    /// Level 4.1 — up to 1920x1080 @ 30fps with higher bitrate.
+    #[value(name = "4.1")]
+    L4_1,
+    /// Level 5.0 — up to 3840x2160 @ 30fps.
+    #[value(name = "5.0")]
+    L5_0,
+    /// Level 5.1 — up to 3840x2160 @ 60fps.
+    #[value(name = "5.1")]
+    L5_1,
+}
+
 /// CLI argument for aspect ratio handling.
 #[derive(Clone, ValueEnum)]
 pub(crate) enum AspectModeArg {

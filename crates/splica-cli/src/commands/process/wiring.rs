@@ -7,7 +7,8 @@ use miette::{Context, IntoDiagnostic, Result};
 
 use splica_codec::{
     AacDecoder, AacEncoderBuilder, Av1Decoder, Av1EncoderBuilder, H264Decoder, H264EncoderBuilder,
-    H265Decoder, H265EncoderBuilder, OpusDecoder, OpusEncoderBuilder,
+    H264EncoderLevel, H264EncoderProfile, H265Decoder, H265EncoderBuilder, OpusDecoder,
+    OpusEncoderBuilder,
 };
 use splica_core::{AudioCodec, Codec, ContainerFormat, VideoCodec};
 use splica_filter::{AspectMode, CropFilter, ScaleFilter};
@@ -16,7 +17,7 @@ use splica_pipeline::PipelineBuilder;
 use super::args::{
     parse_crop, parse_resize, AudioCodecConfig, ProcessArgs, VideoTrackCodec, VideoTrackConfig,
 };
-use crate::commands::{AspectModeArg, VideoCodecArg};
+use crate::commands::{AspectModeArg, H264LevelArg, H264ProfileArg, VideoCodecArg};
 
 // ---------------------------------------------------------------------------
 // Video encoder wiring
@@ -58,6 +59,20 @@ pub(super) fn wire_video_encoder(
     let use_av1 = matches!(out_container, ContainerFormat::WebM)
         || matches!(args.codec, Some(VideoCodecArg::Av1));
     let use_h265 = matches!(args.codec, Some(VideoCodecArg::H265));
+
+    // Validate that --h264-profile/--h264-level are only used with H.264 output
+    if use_av1 || use_h265 {
+        if args.h264_profile.is_some() {
+            return Err(miette::miette!(
+                "--h264-profile can only be used when the output codec is H.264"
+            ));
+        }
+        if args.h264_level.is_some() {
+            return Err(miette::miette!(
+                "--h264-level can only be used when the output codec is H.264"
+            ));
+        }
+    }
 
     let (enc_w, enc_h) = if let Some(resize_str) = args.resize {
         parse_resize(resize_str)?
@@ -114,6 +129,27 @@ pub(super) fn wire_video_encoder(
 
         if let Some(cs) = vtc.color_space {
             enc_builder = enc_builder.color_space(cs);
+        }
+
+        if let Some(profile_arg) = args.h264_profile {
+            let profile = match profile_arg {
+                H264ProfileArg::Baseline => H264EncoderProfile::Baseline,
+                H264ProfileArg::Main => H264EncoderProfile::Main,
+                H264ProfileArg::High => H264EncoderProfile::High,
+            };
+            enc_builder = enc_builder.profile(profile);
+        }
+
+        if let Some(level_arg) = args.h264_level {
+            let level = match level_arg {
+                H264LevelArg::L3_0 => H264EncoderLevel::Level3_0,
+                H264LevelArg::L3_1 => H264EncoderLevel::Level3_1,
+                H264LevelArg::L4_0 => H264EncoderLevel::Level4_0,
+                H264LevelArg::L4_1 => H264EncoderLevel::Level4_1,
+                H264LevelArg::L5_0 => H264EncoderLevel::Level5_0,
+                H264LevelArg::L5_1 => H264EncoderLevel::Level5_1,
+            };
+            enc_builder = enc_builder.level(level);
         }
 
         let encoder = enc_builder
