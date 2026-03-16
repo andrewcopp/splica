@@ -142,6 +142,7 @@ pub(crate) struct CompleteEvent {
     pub output_duration_secs: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_bitrate_kbps: Option<u64>,
+    pub output_sha256: String,
 }
 
 #[derive(Serialize)]

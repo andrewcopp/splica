@@ -3,9 +3,11 @@ mod reencode;
 mod stream_copy;
 mod wiring;
 
+use std::io::Read as _;
 use std::time::Instant;
 
 use miette::Result;
+use sha2::{Digest, Sha256};
 
 pub(crate) use args::ProcessArgs;
 
@@ -28,6 +30,23 @@ struct TranscodeOutput {
     elapsed_secs: f64,
 }
 
+fn compute_sha256(path: &std::path::Path) -> Result<String> {
+    let mut file = std::fs::File::open(path)
+        .map_err(|e| miette::miette!("failed to open output for hashing: {e}"))?;
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 8192];
+    loop {
+        let n = file
+            .read(&mut buf)
+            .map_err(|e| miette::miette!("failed to read output for hashing: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
 pub(crate) fn process(args: &ProcessArgs<'_>, format: &OutputFormat) -> Result<()> {
     let json_mode = matches!(format, OutputFormat::Json);
 
@@ -37,6 +56,7 @@ pub(crate) fn process(args: &ProcessArgs<'_>, format: &OutputFormat) -> Result<(
     if json_mode {
         match result {
             Ok(out) => {
+                let sha256 = compute_sha256(args.output)?;
                 let complete = CompleteEvent {
                     event_type: "complete",
                     input: args.input.display().to_string(),
@@ -50,6 +70,7 @@ pub(crate) fn process(args: &ProcessArgs<'_>, format: &OutputFormat) -> Result<(
                     output_codec: out.output_codec,
                     output_duration_secs: out.output_duration_secs,
                     output_bitrate_kbps: out.output_bitrate_kbps,
+                    output_sha256: sha256,
                 };
                 println!("{}", serde_json::to_string(&complete).unwrap());
                 Ok(())
@@ -68,7 +89,8 @@ pub(crate) fn process(args: &ProcessArgs<'_>, format: &OutputFormat) -> Result<(
     } else {
         match result {
             Ok(out) => {
-                print_text_summary(args, &out);
+                let sha256 = compute_sha256(args.output)?;
+                print_text_summary(args, &out, &sha256);
                 Ok(())
             }
             Err(e) => Err(e),
@@ -196,7 +218,7 @@ fn format_duration(secs: f64) -> String {
     }
 }
 
-fn print_text_summary(args: &ProcessArgs<'_>, out: &TranscodeOutput) {
+fn print_text_summary(args: &ProcessArgs<'_>, out: &TranscodeOutput, sha256: &str) {
     let input_size = std::fs::metadata(args.input).map(|m| m.len()).unwrap_or(0);
     let output_size = std::fs::metadata(args.output).map(|m| m.len()).unwrap_or(0);
 
@@ -256,5 +278,6 @@ fn print_text_summary(args: &ProcessArgs<'_>, out: &TranscodeOutput) {
         eprintln!("  Audio: {}", audio_summary.join(", "));
     }
 
+    eprintln!("  SHA-256: {sha256}");
     eprintln!("  Time: {:.1}s", out.elapsed_secs);
 }
