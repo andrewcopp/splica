@@ -398,3 +398,54 @@ impl Pipeline {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod frame_rate_limit_tests {
+    use super::FrameRateLimit;
+
+    #[test]
+    fn test_that_first_frame_is_never_dropped() {
+        let mut limiter = FrameRateLimit::new(30.0);
+
+        assert!(!limiter.should_drop(0.0));
+    }
+
+    #[test]
+    fn test_that_frame_within_interval_is_dropped() {
+        let mut limiter = FrameRateLimit::new(30.0); // 33.3ms interval
+
+        assert!(!limiter.should_drop(0.0));
+        assert!(limiter.should_drop(0.010)); // 10ms < 33.3ms
+        assert!(limiter.should_drop(0.020)); // 20ms < 33.3ms
+        assert!(limiter.should_drop(0.030)); // 30ms < 33.3ms
+    }
+
+    #[test]
+    fn test_that_frame_past_interval_is_emitted() {
+        let mut limiter = FrameRateLimit::new(30.0); // 33.3ms interval
+
+        assert!(!limiter.should_drop(0.0));
+        assert!(!limiter.should_drop(0.034)); // 34ms > 33.3ms
+    }
+
+    #[test]
+    fn test_that_interval_resets_after_emission() {
+        let mut limiter = FrameRateLimit::new(10.0); // 100ms interval
+
+        assert!(!limiter.should_drop(0.0));
+        assert!(limiter.should_drop(0.050));  // 50ms < 100ms, dropped
+        assert!(!limiter.should_drop(0.100)); // 100ms >= 100ms, emitted
+        assert!(limiter.should_drop(0.150));  // 50ms since last emit, dropped
+        assert!(!limiter.should_drop(0.200)); // 100ms since last emit, emitted
+    }
+
+    #[test]
+    fn test_that_max_fps_one_allows_one_frame_per_second() {
+        let mut limiter = FrameRateLimit::new(1.0); // 1000ms interval
+
+        assert!(!limiter.should_drop(0.0));
+        assert!(limiter.should_drop(0.5));
+        assert!(limiter.should_drop(0.999));
+        assert!(!limiter.should_drop(1.0));
+    }
+}
