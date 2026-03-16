@@ -1,4 +1,4 @@
-# Exit Code Contract v1.0
+# Exit Code & Error Kind Contract v1.1
 
 > **Stability notice:** This contract is stable. Changes require a semver bump.
 
@@ -29,16 +29,24 @@ the process exit code.
 When running with `--format json`, error output includes an `error_kind` field.
 The mapping from `error_kind` values to exit codes is:
 
-| `error_kind`          | Exit Code | `ErrorKind` variant    |
-|-----------------------|-----------|------------------------|
-| `bad_input`           | 1         | `InvalidInput`         |
-| `unsupported_format`  | 1         | `UnsupportedFormat`    |
-| `internal_error`      | 2         | `Io`, `Internal`       |
-| `resource_exhausted`  | 3         | `ResourceExhausted`    |
+| `error_kind`          | Exit Code | Retryable | `ErrorKind` variant    | Description                                                   |
+|-----------------------|-----------|-----------|------------------------|---------------------------------------------------------------|
+| `bad_input`           | 1         | No        | `InvalidInput`         | Malformed file, invalid arguments, or configuration error     |
+| `unsupported_format`  | 1         | No        | `UnsupportedFormat`    | Recognized but unsupported codec or container format          |
+| `internal_error`      | 2         | Yes       | `Io`, `Internal`       | Encoder/muxer/I/O failure (bug or transient)                  |
+| `resource_exhausted`  | 3         | Yes       | `ResourceExhausted`    | Memory, file handles, or budget limits exceeded               |
+
+These `error_kind` values use stable snake\_case strings that **will not change
+across minor versions**. Adding a new value is a minor-version change; removing
+or renaming an existing value is a breaking change.
 
 Unrecognized errors (those not wrapping a typed splica library error) default to
 `bad_input` with exit code 1. This covers CLI-level validation errors such as
 invalid arguments.
+
+A compile-time exhaustiveness test in `splica-cli` (`error_contract_tests.rs`)
+ensures that adding a new `ErrorKind` variant without updating this contract
+fails the build.
 
 ## JSON error output format
 
@@ -46,9 +54,14 @@ invalid arguments.
 {
   "type": "error",
   "error_kind": "bad_input",
-  "message": "unsupported codec 'vp8' for container 'mp4'"
+  "message": "unsupported codec 'vp8' for container 'mp4'",
+  "input": "bad_file.mp4"
 }
 ```
+
+The `input` field contains the verbatim input file path as passed by the caller.
+It is `null` (or absent) when no input file was parsed before the error occurred
+(e.g., flag parsing failures) or when the command operates on multiple inputs.
 
 ## `ErrorKind` retryability
 
@@ -66,6 +79,7 @@ The non-retryable kinds are:
 
 ## Version history
 
-| Version | Date       | Changes              |
-|---------|------------|----------------------|
-| v1.0    | 2026-03-16 | Initial publication. |
+| Version | Date       | Changes                                                    |
+|---------|------------|------------------------------------------------------------|
+| v1.1    | 2026-03-16 | Added error_kind stability contract, retryability, and exhaustiveness test. |
+| v1.0    | 2026-03-16 | Initial publication.                                       |

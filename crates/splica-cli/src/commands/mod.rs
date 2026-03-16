@@ -114,10 +114,6 @@ pub(crate) enum AspectModeArg {
 pub(crate) mod exit_code {
     /// Bad input: malformed file, unsupported format, invalid arguments. Do not retry.
     pub const BAD_INPUT: i32 = 1;
-    /// Internal error: encoder/muxer failure. May retry.
-    pub const INTERNAL: i32 = 2;
-    /// Resource exhaustion: memory, file handles, budget limits. Retry after backoff.
-    pub const RESOURCE_EXHAUSTED: i32 = 3;
 }
 
 // ---------------------------------------------------------------------------
@@ -176,6 +172,8 @@ pub(crate) struct ErrorResult {
     pub event_type: &'static str,
     pub error_kind: String,
     pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -226,11 +224,5 @@ fn extract_error_kind(error: &miette::Report) -> Option<ErrorKind> {
 }
 
 fn error_kind_to_classification(kind: ErrorKind) -> (&'static str, i32) {
-    match kind {
-        ErrorKind::InvalidInput => ("bad_input", exit_code::BAD_INPUT),
-        ErrorKind::UnsupportedFormat => ("unsupported_format", exit_code::BAD_INPUT),
-        ErrorKind::Io => ("internal_error", exit_code::INTERNAL),
-        ErrorKind::ResourceExhausted => ("resource_exhausted", exit_code::RESOURCE_EXHAUSTED),
-        ErrorKind::Internal => ("internal_error", exit_code::INTERNAL),
-    }
+    (kind.as_error_kind_str(), kind.exit_code())
 }

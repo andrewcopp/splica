@@ -43,9 +43,45 @@ impl fmt::Display for ErrorKind {
 }
 
 impl ErrorKind {
+    /// All variants of `ErrorKind`, in declaration order.
+    ///
+    /// Used by contract tests to ensure the documented error taxonomy stays
+    /// in sync with the code. If you add a new variant, add it here too —
+    /// the exhaustiveness test will fail if you forget.
+    pub const ALL: &[ErrorKind] = &[
+        ErrorKind::InvalidInput,
+        ErrorKind::UnsupportedFormat,
+        ErrorKind::Io,
+        ErrorKind::ResourceExhausted,
+        ErrorKind::Internal,
+    ];
+
     /// Returns `true` if the error may be transient and retrying could succeed.
     pub fn is_retryable(self) -> bool {
         matches!(self, Self::Io | Self::ResourceExhausted)
+    }
+
+    /// The stable snake_case string emitted as `error_kind` in JSON error output.
+    ///
+    /// These strings are part of the stability contract (`docs/exit-codes.md`)
+    /// and MUST NOT change across minor versions.
+    pub fn as_error_kind_str(self) -> &'static str {
+        match self {
+            Self::InvalidInput => "bad_input",
+            Self::UnsupportedFormat => "unsupported_format",
+            Self::Io => "internal_error",
+            Self::ResourceExhausted => "resource_exhausted",
+            Self::Internal => "internal_error",
+        }
+    }
+
+    /// The CLI exit code for this error kind.
+    pub fn exit_code(self) -> i32 {
+        match self {
+            Self::InvalidInput | Self::UnsupportedFormat => 1,
+            Self::Io | Self::Internal => 2,
+            Self::ResourceExhausted => 3,
+        }
     }
 }
 
@@ -310,6 +346,23 @@ impl PipelineError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_that_error_kind_all_is_exhaustive() {
+        // This match has no wildcard. Adding a new ErrorKind variant
+        // without updating ALL will cause a compile error here.
+        for &kind in ErrorKind::ALL {
+            match kind {
+                ErrorKind::InvalidInput
+                | ErrorKind::UnsupportedFormat
+                | ErrorKind::Io
+                | ErrorKind::ResourceExhausted
+                | ErrorKind::Internal => {}
+            }
+        }
+
+        assert_eq!(ErrorKind::ALL.len(), 5);
+    }
 
     #[test]
     fn test_that_io_errors_are_retryable() {
