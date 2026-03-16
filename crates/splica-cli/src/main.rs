@@ -9,7 +9,20 @@ use commands::process::ProcessArgs;
 use commands::{AspectModeArg, EncodePreset, OutputFormat, VideoCodecArg};
 
 #[derive(Parser)]
-#[command(name = "splica", version, about = "Media processing tool")]
+#[command(
+    name = "splica",
+    version,
+    about = "Media processing tool",
+    after_long_help = "\
+EXIT CODES:
+  0  Success
+  1  Bad input — malformed file, unsupported format, or invalid arguments (do not retry)
+  2  Internal error — encoder/muxer failure (may retry)
+  3  Resource exhausted — memory, file handles, or budget limits (retry after backoff)
+
+In --format json mode, errors include an \"error_kind\" field with one of:
+  bad_input, unsupported_format, internal_error, resource_exhausted"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
