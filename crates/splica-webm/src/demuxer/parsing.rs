@@ -461,3 +461,1016 @@ pub(crate) fn build_track_info(
         audio,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use splica_core::{AudioCodec, ChannelLayout, Codec, TrackKind, VideoCodec};
+
+    // -----------------------------------------------------------------------
+    // EBML encoding helpers (mirrors crate::ebml encoding functions)
+    // -----------------------------------------------------------------------
+
+    fn encode_element_id(id: u32) -> Vec<u8> {
+        if id <= 0xFF {
+            vec![id as u8]
+        } else if id <= 0xFFFF {
+            vec![(id >> 8) as u8, id as u8]
+        } else if id <= 0xFF_FFFF {
+            vec![(id >> 16) as u8, (id >> 8) as u8, id as u8]
+        } else {
+            vec![
+                (id >> 24) as u8,
+                (id >> 16) as u8,
+                (id >> 8) as u8,
+                id as u8,
+            ]
+        }
+    }
+
+    fn encode_data_size(size: u64) -> Vec<u8> {
+        if size < 0x7F {
+            vec![(size as u8) | 0x80]
+        } else if size < 0x3FFF {
+            let val = size | 0x4000;
+            vec![(val >> 8) as u8, val as u8]
+        } else {
+            let val = size | 0x10_000000;
+            vec![
+                (val >> 24) as u8,
+                (val >> 16) as u8,
+                (val >> 8) as u8,
+                val as u8,
+            ]
+        }
+    }
+
+    fn element(id: u32, body: &[u8]) -> Vec<u8> {
+        let mut out = encode_element_id(id);
+        out.extend_from_slice(&encode_data_size(body.len() as u64));
+        out.extend_from_slice(body);
+        out
+    }
+
+    fn uint_element(id: u32, value: u64) -> Vec<u8> {
+        let bytes = if value == 0 {
+            vec![0]
+        } else if value <= 0xFF {
+            vec![value as u8]
+        } else if value <= 0xFFFF {
+            vec![(value >> 8) as u8, value as u8]
+        } else if value <= 0xFF_FFFF {
+            vec![(value >> 16) as u8, (value >> 8) as u8, value as u8]
+        } else {
+            value.to_be_bytes().to_vec()
+        };
+        element(id, &bytes)
+    }
+
+    fn string_element(id: u32, s: &str) -> Vec<u8> {
+        element(id, s.as_bytes())
+    }
+
+    fn float_element(id: u32, value: f64) -> Vec<u8> {
+        element(id, &value.to_be_bytes())
+    }
+
+    // -----------------------------------------------------------------------
+    // parse_ebml_doc_type
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_that_parse_ebml_doc_type_returns_webm_string() {
+        // GIVEN — an EBML header body containing a DocType element set to "webm"
+        let data = string_element(elements::EBML_DOC_TYPE, "webm");
+
+        // WHEN — we parse the doc type
+        let doc_type = parse_ebml_doc_type(&data, 0).unwrap();
+
+        // THEN — it should be "webm"
+        assert_eq!(doc_type, "webm");
+    }
+
+    #[test]
+    fn test_that_parse_ebml_doc_type_returns_matroska_string() {
+        // GIVEN — an EBML header body containing DocType "matroska"
+        let data = string_element(elements::EBML_DOC_TYPE, "matroska");
+
+        // WHEN — we parse the doc type
+        let doc_type = parse_ebml_doc_type(&data, 0).unwrap();
+
+        // THEN — it should be "matroska"
+        assert_eq!(doc_type, "matroska");
+    }
+
+    #[test]
+    fn test_that_parse_ebml_doc_type_errors_when_missing() {
+        // GIVEN — an EBML header body with no DocType element
+        let data = uint_element(elements::EBML_VERSION, 1);
+
+        // WHEN — we parse the doc type
+        let result = parse_ebml_doc_type(&data, 0);
+
+        // THEN — it should fail with MissingElement
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_that_parse_ebml_doc_type_skips_unrelated_elements() {
+        // GIVEN — an EBML header body with a version element before the DocType
+        let data = [
+            uint_element(elements::EBML_VERSION, 1),
+            string_element(elements::EBML_DOC_TYPE, "webm"),
+        ]
+        .concat();
+
+        // WHEN — we parse the doc type
+        let doc_type = parse_ebml_doc_type(&data, 0).unwrap();
+
+        // THEN — it should find "webm" after skipping unrelated elements
+        assert_eq!(doc_type, "webm");
+    }
+
+    // -----------------------------------------------------------------------
+    // parse_info
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_that_parse_info_returns_default_timestamp_scale() {
+        // GIVEN — an empty Info element (no sub-elements)
+        let data: &[u8] = &[];
+
+        // WHEN — we parse the info
+        let info = parse_info(data, 0).unwrap();
+
+        // THEN — timestamp_scale defaults to 1_000_000
+        assert_eq!(info.timestamp_scale, 1_000_000);
+    }
+
+    #[test]
+    fn test_that_parse_info_reads_custom_timestamp_scale() {
+        // GIVEN — an Info body with TimestampScale set to 500_000
+        let data = uint_element(elements::TIMESTAMP_SCALE, 500_000);
+
+        // WHEN — we parse the info
+        let info = parse_info(&data, 0).unwrap();
+
+        // THEN — timestamp_scale should be 500_000
+        assert_eq!(info.timestamp_scale, 500_000);
+    }
+
+    #[test]
+    fn test_that_parse_info_returns_none_duration_when_absent() {
+        // GIVEN — an Info body with only TimestampScale
+        let data = uint_element(elements::TIMESTAMP_SCALE, 1_000_000);
+
+        // WHEN — we parse the info
+        let info = parse_info(&data, 0).unwrap();
+
+        // THEN — duration_ns should be None
+        assert!(info.duration_ns.is_none());
+    }
+
+    #[test]
+    fn test_that_parse_info_computes_duration_ns() {
+        // GIVEN — an Info body with TimestampScale=1_000_000 and Duration=5000.0 ticks
+        let data = [
+            uint_element(elements::TIMESTAMP_SCALE, 1_000_000),
+            float_element(elements::DURATION, 5000.0),
+        ]
+        .concat();
+
+        // WHEN — we parse the info
+        let info = parse_info(&data, 0).unwrap();
+
+        // THEN — duration_ns = 5000.0 * 1_000_000 = 5_000_000_000 ns (5 seconds)
+        let duration = info.duration_ns.unwrap();
+        assert!((duration - 5_000_000_000.0).abs() < 1.0);
+    }
+
+    // -----------------------------------------------------------------------
+    // parse_tracks
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_that_parse_tracks_returns_empty_for_no_entries() {
+        // GIVEN — an empty Tracks body
+        let data: &[u8] = &[];
+
+        // WHEN — we parse tracks
+        let tracks = parse_tracks(data, 0).unwrap();
+
+        // THEN — the result should be empty
+        assert!(tracks.is_empty());
+    }
+
+    #[test]
+    fn test_that_parse_tracks_parses_single_video_track() {
+        // GIVEN — a Tracks body with one VP9 video TrackEntry
+        let video_settings = [
+            uint_element(elements::PIXEL_WIDTH, 1920),
+            uint_element(elements::PIXEL_HEIGHT, 1080),
+        ]
+        .concat();
+        let track_entry = [
+            uint_element(elements::TRACK_NUMBER, 1),
+            uint_element(elements::TRACK_TYPE, elements::TRACK_TYPE_VIDEO),
+            string_element(elements::CODEC_ID, elements::CODEC_ID_VP9),
+            element(elements::VIDEO, &video_settings),
+        ]
+        .concat();
+        let data = element(elements::TRACK_ENTRY, &track_entry);
+
+        // WHEN — we parse tracks
+        let tracks = parse_tracks(&data, 0).unwrap();
+
+        // THEN — there should be exactly one track
+        assert_eq!(tracks.len(), 1);
+    }
+
+    #[test]
+    fn test_that_parse_tracks_reads_video_dimensions() {
+        // GIVEN — a Tracks body with a 1920x1080 video track
+        let video_settings = [
+            uint_element(elements::PIXEL_WIDTH, 1920),
+            uint_element(elements::PIXEL_HEIGHT, 1080),
+        ]
+        .concat();
+        let track_entry = [
+            uint_element(elements::TRACK_NUMBER, 1),
+            uint_element(elements::TRACK_TYPE, elements::TRACK_TYPE_VIDEO),
+            string_element(elements::CODEC_ID, elements::CODEC_ID_VP9),
+            element(elements::VIDEO, &video_settings),
+        ]
+        .concat();
+        let data = element(elements::TRACK_ENTRY, &track_entry);
+
+        // WHEN — we parse tracks
+        let tracks = parse_tracks(&data, 0).unwrap();
+
+        // THEN — the track should have width=1920 and height=1080
+        assert_eq!(tracks[0].width, Some(1920));
+    }
+
+    #[test]
+    fn test_that_parse_tracks_reads_video_height() {
+        // GIVEN — a Tracks body with a 1920x1080 video track
+        let video_settings = [
+            uint_element(elements::PIXEL_WIDTH, 1920),
+            uint_element(elements::PIXEL_HEIGHT, 1080),
+        ]
+        .concat();
+        let track_entry = [
+            uint_element(elements::TRACK_NUMBER, 1),
+            uint_element(elements::TRACK_TYPE, elements::TRACK_TYPE_VIDEO),
+            string_element(elements::CODEC_ID, elements::CODEC_ID_VP9),
+            element(elements::VIDEO, &video_settings),
+        ]
+        .concat();
+        let data = element(elements::TRACK_ENTRY, &track_entry);
+
+        // WHEN — we parse tracks
+        let tracks = parse_tracks(&data, 0).unwrap();
+
+        // THEN — the track should have height=1080
+        assert_eq!(tracks[0].height, Some(1080));
+    }
+
+    #[test]
+    fn test_that_parse_tracks_reads_audio_sample_rate() {
+        // GIVEN — a Tracks body with an Opus audio track at 48kHz
+        let audio_settings = [
+            float_element(elements::SAMPLING_FREQUENCY, 48000.0),
+            uint_element(elements::CHANNELS, 2),
+        ]
+        .concat();
+        let track_entry = [
+            uint_element(elements::TRACK_NUMBER, 2),
+            uint_element(elements::TRACK_TYPE, elements::TRACK_TYPE_AUDIO),
+            string_element(elements::CODEC_ID, elements::CODEC_ID_OPUS),
+            element(elements::AUDIO, &audio_settings),
+        ]
+        .concat();
+        let data = element(elements::TRACK_ENTRY, &track_entry);
+
+        // WHEN — we parse tracks
+        let tracks = parse_tracks(&data, 0).unwrap();
+
+        // THEN — the track should have sample_rate=48000
+        let sr = tracks[0].sample_rate.unwrap();
+        assert!((sr - 48000.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_that_parse_tracks_reads_audio_channels() {
+        // GIVEN — a Tracks body with a stereo Opus audio track
+        let audio_settings = [
+            float_element(elements::SAMPLING_FREQUENCY, 48000.0),
+            uint_element(elements::CHANNELS, 2),
+        ]
+        .concat();
+        let track_entry = [
+            uint_element(elements::TRACK_NUMBER, 2),
+            uint_element(elements::TRACK_TYPE, elements::TRACK_TYPE_AUDIO),
+            string_element(elements::CODEC_ID, elements::CODEC_ID_OPUS),
+            element(elements::AUDIO, &audio_settings),
+        ]
+        .concat();
+        let data = element(elements::TRACK_ENTRY, &track_entry);
+
+        // WHEN — we parse tracks
+        let tracks = parse_tracks(&data, 0).unwrap();
+
+        // THEN — the track should have 2 channels
+        assert_eq!(tracks[0].channels, Some(2));
+    }
+
+    #[test]
+    fn test_that_parse_tracks_stores_codec_private_data() {
+        // GIVEN — a TrackEntry with CodecPrivate data
+        let private_data = vec![0xDE, 0xAD, 0xBE, 0xEF];
+        let track_entry = [
+            uint_element(elements::TRACK_NUMBER, 1),
+            uint_element(elements::TRACK_TYPE, elements::TRACK_TYPE_VIDEO),
+            string_element(elements::CODEC_ID, elements::CODEC_ID_VP9),
+            element(elements::CODEC_PRIVATE, &private_data),
+        ]
+        .concat();
+        let data = element(elements::TRACK_ENTRY, &track_entry);
+
+        // WHEN — we parse tracks
+        let tracks = parse_tracks(&data, 0).unwrap();
+
+        // THEN — codec_private should contain the raw bytes
+        assert_eq!(
+            tracks[0].codec_private.as_deref(),
+            Some(&[0xDE, 0xAD, 0xBE, 0xEF][..])
+        );
+    }
+
+    #[test]
+    fn test_that_parse_tracks_handles_multiple_track_entries() {
+        // GIVEN — a Tracks body with video and audio TrackEntries
+        let video_entry = element(
+            elements::TRACK_ENTRY,
+            &[
+                uint_element(elements::TRACK_NUMBER, 1),
+                uint_element(elements::TRACK_TYPE, elements::TRACK_TYPE_VIDEO),
+                string_element(elements::CODEC_ID, elements::CODEC_ID_VP9),
+            ]
+            .concat(),
+        );
+        let audio_entry = element(
+            elements::TRACK_ENTRY,
+            &[
+                uint_element(elements::TRACK_NUMBER, 2),
+                uint_element(elements::TRACK_TYPE, elements::TRACK_TYPE_AUDIO),
+                string_element(elements::CODEC_ID, elements::CODEC_ID_OPUS),
+            ]
+            .concat(),
+        );
+        let data = [video_entry, audio_entry].concat();
+
+        // WHEN — we parse tracks
+        let tracks = parse_tracks(&data, 0).unwrap();
+
+        // THEN — there should be two tracks
+        assert_eq!(tracks.len(), 2);
+    }
+
+    #[test]
+    fn test_that_parse_tracks_uses_default_audio_settings_when_absent() {
+        // GIVEN — an audio TrackEntry without an Audio sub-element
+        let track_entry = [
+            uint_element(elements::TRACK_NUMBER, 1),
+            uint_element(elements::TRACK_TYPE, elements::TRACK_TYPE_AUDIO),
+            string_element(elements::CODEC_ID, elements::CODEC_ID_OPUS),
+        ]
+        .concat();
+        let data = element(elements::TRACK_ENTRY, &track_entry);
+
+        // WHEN — we parse tracks
+        let tracks = parse_tracks(&data, 0).unwrap();
+
+        // THEN — sample_rate and channels should be None (no Audio sub-element parsed)
+        assert!(tracks[0].sample_rate.is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // parse_simple_block
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_that_parse_simple_block_reads_track_number() {
+        // GIVEN — a SimpleBlock with track_number=1, relative_ts=0, keyframe
+        let mut data = Vec::new();
+        data.extend_from_slice(&encode_data_size(1)); // track number vint
+        data.extend_from_slice(&0i16.to_be_bytes()); // relative timestamp
+        data.push(0x80); // flags: keyframe
+        data.extend_from_slice(&[0xAA, 0xBB]); // frame data
+
+        // WHEN — we parse the simple block
+        let packet = parse_simple_block(&data, 0, 1_000_000, 0).unwrap().unwrap();
+
+        // THEN — track_number should be 1
+        assert_eq!(packet.track_number, 1);
+    }
+
+    #[test]
+    fn test_that_parse_simple_block_detects_keyframe() {
+        // GIVEN — a SimpleBlock with keyframe flag set
+        let mut data = Vec::new();
+        data.extend_from_slice(&encode_data_size(1));
+        data.extend_from_slice(&0i16.to_be_bytes());
+        data.push(0x80); // keyframe flag
+        data.extend_from_slice(&[0xAA]);
+
+        // WHEN — we parse the simple block
+        let packet = parse_simple_block(&data, 0, 1_000_000, 0).unwrap().unwrap();
+
+        // THEN — is_keyframe should be true
+        assert!(packet.is_keyframe);
+    }
+
+    #[test]
+    fn test_that_parse_simple_block_detects_non_keyframe() {
+        // GIVEN — a SimpleBlock without keyframe flag
+        let mut data = Vec::new();
+        data.extend_from_slice(&encode_data_size(1));
+        data.extend_from_slice(&0i16.to_be_bytes());
+        data.push(0x00); // no keyframe
+        data.extend_from_slice(&[0xAA]);
+
+        // WHEN — we parse the simple block
+        let packet = parse_simple_block(&data, 0, 1_000_000, 0).unwrap().unwrap();
+
+        // THEN — is_keyframe should be false
+        assert!(!packet.is_keyframe);
+    }
+
+    #[test]
+    fn test_that_parse_simple_block_computes_pts_ns() {
+        // GIVEN — a SimpleBlock with cluster_timestamp=1000, relative_ts=33
+        let mut data = Vec::new();
+        data.extend_from_slice(&encode_data_size(1));
+        data.extend_from_slice(&33i16.to_be_bytes());
+        data.push(0x80);
+        data.extend_from_slice(&[0xAA]);
+
+        // WHEN — we parse with cluster_timestamp=1000 and timestamp_scale=1_000_000
+        let packet = parse_simple_block(&data, 1000, 1_000_000, 0)
+            .unwrap()
+            .unwrap();
+
+        // THEN — pts_ns = (1000 + 33) * 1_000_000 = 1_033_000_000
+        assert_eq!(packet.pts_ns, 1_033_000_000);
+    }
+
+    #[test]
+    fn test_that_parse_simple_block_extracts_frame_data() {
+        // GIVEN — a SimpleBlock with specific frame payload
+        let mut data = Vec::new();
+        data.extend_from_slice(&encode_data_size(1));
+        data.extend_from_slice(&0i16.to_be_bytes());
+        data.push(0x80);
+        data.extend_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]);
+
+        // WHEN — we parse the simple block
+        let packet = parse_simple_block(&data, 0, 1_000_000, 0).unwrap().unwrap();
+
+        // THEN — the frame data should match
+        assert_eq!(&packet.data, &[0xDE, 0xAD, 0xBE, 0xEF]);
+    }
+
+    #[test]
+    fn test_that_parse_simple_block_handles_negative_relative_timestamp() {
+        // GIVEN — a SimpleBlock with negative relative timestamp (-10)
+        let mut data = Vec::new();
+        data.extend_from_slice(&encode_data_size(1));
+        data.extend_from_slice(&(-10i16).to_be_bytes());
+        data.push(0x00);
+        data.extend_from_slice(&[0xAA]);
+
+        // WHEN — we parse with cluster_timestamp=100
+        let packet = parse_simple_block(&data, 100, 1_000_000, 0)
+            .unwrap()
+            .unwrap();
+
+        // THEN — pts_ns = (100 + (-10)) * 1_000_000 = 90_000_000
+        assert_eq!(packet.pts_ns, 90_000_000);
+    }
+
+    #[test]
+    fn test_that_parse_simple_block_errors_on_empty_data() {
+        // GIVEN — empty data
+        let data: &[u8] = &[];
+
+        // WHEN — we parse the simple block
+        let result = parse_simple_block(data, 0, 1_000_000, 0);
+
+        // THEN — it should return an error
+        assert!(result.is_err());
+    }
+
+    // -----------------------------------------------------------------------
+    // build_track_info
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_that_build_track_info_creates_video_track_for_vp9() {
+        // GIVEN — a WebmTrack with VP9 codec
+        let track = WebmTrack {
+            track_number: 1,
+            track_type: elements::TRACK_TYPE_VIDEO,
+            codec_id: elements::CODEC_ID_VP9.to_string(),
+            codec_private: None,
+            width: Some(1920),
+            height: Some(1080),
+            sample_rate: None,
+            channels: None,
+        };
+
+        // WHEN — we build TrackInfo
+        let info = build_track_info(0, &track, None).unwrap();
+
+        // THEN — kind should be Video
+        assert_eq!(info.kind, TrackKind::Video);
+    }
+
+    #[test]
+    fn test_that_build_track_info_maps_vp9_codec() {
+        // GIVEN — a VP9 video track
+        let track = WebmTrack {
+            track_number: 1,
+            track_type: elements::TRACK_TYPE_VIDEO,
+            codec_id: elements::CODEC_ID_VP9.to_string(),
+            codec_private: None,
+            width: Some(1920),
+            height: Some(1080),
+            sample_rate: None,
+            channels: None,
+        };
+
+        // WHEN — we build TrackInfo
+        let info = build_track_info(0, &track, None).unwrap();
+
+        // THEN — codec should be Video(Other("VP9"))
+        assert_eq!(
+            info.codec,
+            Codec::Video(VideoCodec::Other("VP9".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_that_build_track_info_maps_av1_codec() {
+        // GIVEN — an AV1 video track
+        let track = WebmTrack {
+            track_number: 1,
+            track_type: elements::TRACK_TYPE_VIDEO,
+            codec_id: elements::CODEC_ID_AV1.to_string(),
+            codec_private: None,
+            width: Some(1920),
+            height: Some(1080),
+            sample_rate: None,
+            channels: None,
+        };
+
+        // WHEN — we build TrackInfo
+        let info = build_track_info(0, &track, None).unwrap();
+
+        // THEN — codec should be Video(Av1)
+        assert_eq!(info.codec, Codec::Video(VideoCodec::Av1));
+    }
+
+    #[test]
+    fn test_that_build_track_info_maps_h264_codec() {
+        // GIVEN — an H264 video track
+        let track = WebmTrack {
+            track_number: 1,
+            track_type: elements::TRACK_TYPE_VIDEO,
+            codec_id: elements::CODEC_ID_H264.to_string(),
+            codec_private: None,
+            width: Some(1920),
+            height: Some(1080),
+            sample_rate: None,
+            channels: None,
+        };
+
+        // WHEN — we build TrackInfo
+        let info = build_track_info(0, &track, None).unwrap();
+
+        // THEN — codec should be Video(H264)
+        assert_eq!(info.codec, Codec::Video(VideoCodec::H264));
+    }
+
+    #[test]
+    fn test_that_build_track_info_maps_h265_codec() {
+        // GIVEN — an H265 video track
+        let track = WebmTrack {
+            track_number: 1,
+            track_type: elements::TRACK_TYPE_VIDEO,
+            codec_id: elements::CODEC_ID_H265.to_string(),
+            codec_private: None,
+            width: Some(1920),
+            height: Some(1080),
+            sample_rate: None,
+            channels: None,
+        };
+
+        // WHEN — we build TrackInfo
+        let info = build_track_info(0, &track, None).unwrap();
+
+        // THEN — codec should be Video(H265)
+        assert_eq!(info.codec, Codec::Video(VideoCodec::H265));
+    }
+
+    #[test]
+    fn test_that_build_track_info_creates_audio_track_for_opus() {
+        // GIVEN — a WebmTrack with Opus codec
+        let track = WebmTrack {
+            track_number: 2,
+            track_type: elements::TRACK_TYPE_AUDIO,
+            codec_id: elements::CODEC_ID_OPUS.to_string(),
+            codec_private: None,
+            width: None,
+            height: None,
+            sample_rate: Some(48000.0),
+            channels: Some(2),
+        };
+
+        // WHEN — we build TrackInfo
+        let info = build_track_info(1, &track, None).unwrap();
+
+        // THEN — kind should be Audio
+        assert_eq!(info.kind, TrackKind::Audio);
+    }
+
+    #[test]
+    fn test_that_build_track_info_maps_opus_codec() {
+        // GIVEN — an Opus audio track
+        let track = WebmTrack {
+            track_number: 2,
+            track_type: elements::TRACK_TYPE_AUDIO,
+            codec_id: elements::CODEC_ID_OPUS.to_string(),
+            codec_private: None,
+            width: None,
+            height: None,
+            sample_rate: Some(48000.0),
+            channels: Some(2),
+        };
+
+        // WHEN — we build TrackInfo
+        let info = build_track_info(1, &track, None).unwrap();
+
+        // THEN — codec should be Audio(Opus)
+        assert_eq!(info.codec, Codec::Audio(AudioCodec::Opus));
+    }
+
+    #[test]
+    fn test_that_build_track_info_maps_aac_codec() {
+        // GIVEN — an AAC audio track
+        let track = WebmTrack {
+            track_number: 2,
+            track_type: elements::TRACK_TYPE_AUDIO,
+            codec_id: elements::CODEC_ID_AAC.to_string(),
+            codec_private: None,
+            width: None,
+            height: None,
+            sample_rate: Some(44100.0),
+            channels: Some(2),
+        };
+
+        // WHEN — we build TrackInfo
+        let info = build_track_info(1, &track, None).unwrap();
+
+        // THEN — codec should be Audio(Aac)
+        assert_eq!(info.codec, Codec::Audio(AudioCodec::Aac));
+    }
+
+    #[test]
+    fn test_that_build_track_info_maps_vorbis_codec() {
+        // GIVEN — a Vorbis audio track
+        let track = WebmTrack {
+            track_number: 2,
+            track_type: elements::TRACK_TYPE_AUDIO,
+            codec_id: elements::CODEC_ID_VORBIS.to_string(),
+            codec_private: None,
+            width: None,
+            height: None,
+            sample_rate: Some(44100.0),
+            channels: Some(2),
+        };
+
+        // WHEN — we build TrackInfo
+        let info = build_track_info(1, &track, None).unwrap();
+
+        // THEN — codec should be Audio(Other("Vorbis"))
+        assert_eq!(
+            info.codec,
+            Codec::Audio(AudioCodec::Other("Vorbis".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_that_build_track_info_errors_on_unknown_video_codec() {
+        // GIVEN — a video track with an unsupported codec
+        let track = WebmTrack {
+            track_number: 1,
+            track_type: elements::TRACK_TYPE_VIDEO,
+            codec_id: "V_UNKNOWN".to_string(),
+            codec_private: None,
+            width: Some(640),
+            height: Some(480),
+            sample_rate: None,
+            channels: None,
+        };
+
+        // WHEN — we build TrackInfo
+        let result = build_track_info(0, &track, None);
+
+        // THEN — it should return an UnsupportedCodec error
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_that_build_track_info_errors_on_unknown_audio_codec() {
+        // GIVEN — an audio track with an unsupported codec
+        let track = WebmTrack {
+            track_number: 2,
+            track_type: elements::TRACK_TYPE_AUDIO,
+            codec_id: "A_UNKNOWN".to_string(),
+            codec_private: None,
+            width: None,
+            height: None,
+            sample_rate: Some(48000.0),
+            channels: Some(2),
+        };
+
+        // WHEN — we build TrackInfo
+        let result = build_track_info(1, &track, None);
+
+        // THEN — it should return an UnsupportedCodec error
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_that_build_track_info_errors_on_unknown_track_type() {
+        // GIVEN — a track with an unsupported track type (subtitle = 17)
+        let track = WebmTrack {
+            track_number: 3,
+            track_type: 17,
+            codec_id: "S_TEXT/UTF8".to_string(),
+            codec_private: None,
+            width: None,
+            height: None,
+            sample_rate: None,
+            channels: None,
+        };
+
+        // WHEN — we build TrackInfo
+        let result = build_track_info(2, &track, None);
+
+        // THEN — it should return an error
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_that_build_track_info_uses_default_dimensions_when_absent() {
+        // GIVEN — a video track with no width/height set
+        let track = WebmTrack {
+            track_number: 1,
+            track_type: elements::TRACK_TYPE_VIDEO,
+            codec_id: elements::CODEC_ID_VP9.to_string(),
+            codec_private: None,
+            width: None,
+            height: None,
+            sample_rate: None,
+            channels: None,
+        };
+
+        // WHEN — we build TrackInfo
+        let info = build_track_info(0, &track, None).unwrap();
+
+        // THEN — width defaults to 0
+        assert_eq!(info.video.unwrap().width, 0);
+    }
+
+    #[test]
+    fn test_that_build_track_info_uses_default_audio_params_when_absent() {
+        // GIVEN — an audio track with no sample_rate or channels set
+        let track = WebmTrack {
+            track_number: 2,
+            track_type: elements::TRACK_TYPE_AUDIO,
+            codec_id: elements::CODEC_ID_OPUS.to_string(),
+            codec_private: None,
+            width: None,
+            height: None,
+            sample_rate: None,
+            channels: None,
+        };
+
+        // WHEN — we build TrackInfo
+        let info = build_track_info(1, &track, None).unwrap();
+
+        // THEN — sample_rate defaults to 48000
+        assert_eq!(info.audio.unwrap().sample_rate, 48000);
+    }
+
+    #[test]
+    fn test_that_build_track_info_maps_mono_channel_layout() {
+        // GIVEN — an audio track with 1 channel
+        let track = WebmTrack {
+            track_number: 2,
+            track_type: elements::TRACK_TYPE_AUDIO,
+            codec_id: elements::CODEC_ID_OPUS.to_string(),
+            codec_private: None,
+            width: None,
+            height: None,
+            sample_rate: Some(48000.0),
+            channels: Some(1),
+        };
+
+        // WHEN — we build TrackInfo
+        let info = build_track_info(1, &track, None).unwrap();
+
+        // THEN — channel_layout should be Mono
+        assert_eq!(
+            info.audio.unwrap().channel_layout,
+            Some(ChannelLayout::Mono)
+        );
+    }
+
+    #[test]
+    fn test_that_build_track_info_maps_stereo_channel_layout() {
+        // GIVEN — an audio track with 2 channels
+        let track = WebmTrack {
+            track_number: 2,
+            track_type: elements::TRACK_TYPE_AUDIO,
+            codec_id: elements::CODEC_ID_OPUS.to_string(),
+            codec_private: None,
+            width: None,
+            height: None,
+            sample_rate: Some(48000.0),
+            channels: Some(2),
+        };
+
+        // WHEN — we build TrackInfo
+        let info = build_track_info(1, &track, None).unwrap();
+
+        // THEN — channel_layout should be Stereo
+        assert_eq!(
+            info.audio.unwrap().channel_layout,
+            Some(ChannelLayout::Stereo)
+        );
+    }
+
+    #[test]
+    fn test_that_build_track_info_maps_surround_5_1_channel_layout() {
+        // GIVEN — an audio track with 6 channels
+        let track = WebmTrack {
+            track_number: 2,
+            track_type: elements::TRACK_TYPE_AUDIO,
+            codec_id: elements::CODEC_ID_OPUS.to_string(),
+            codec_private: None,
+            width: None,
+            height: None,
+            sample_rate: Some(48000.0),
+            channels: Some(6),
+        };
+
+        // WHEN — we build TrackInfo
+        let info = build_track_info(1, &track, None).unwrap();
+
+        // THEN — channel_layout should be Surround5_1
+        assert_eq!(
+            info.audio.unwrap().channel_layout,
+            Some(ChannelLayout::Surround5_1)
+        );
+    }
+
+    #[test]
+    fn test_that_build_track_info_returns_none_layout_for_unknown_channel_count() {
+        // GIVEN — an audio track with 3 channels (not a standard layout)
+        let track = WebmTrack {
+            track_number: 2,
+            track_type: elements::TRACK_TYPE_AUDIO,
+            codec_id: elements::CODEC_ID_OPUS.to_string(),
+            codec_private: None,
+            width: None,
+            height: None,
+            sample_rate: Some(48000.0),
+            channels: Some(3),
+        };
+
+        // WHEN — we build TrackInfo
+        let info = build_track_info(1, &track, None).unwrap();
+
+        // THEN — channel_layout should be None
+        assert!(info.audio.unwrap().channel_layout.is_none());
+    }
+
+    #[test]
+    fn test_that_build_track_info_sets_duration_from_segment() {
+        // GIVEN — a video track with segment duration of 10 seconds
+        let track = WebmTrack {
+            track_number: 1,
+            track_type: elements::TRACK_TYPE_VIDEO,
+            codec_id: elements::CODEC_ID_VP9.to_string(),
+            codec_private: None,
+            width: Some(1920),
+            height: Some(1080),
+            sample_rate: None,
+            channels: None,
+        };
+
+        // WHEN — we build TrackInfo with 10 seconds duration
+        let info = build_track_info(0, &track, Some(10_000_000_000.0)).unwrap();
+
+        // THEN — duration should be present
+        assert!(info.duration.is_some());
+    }
+
+    #[test]
+    fn test_that_build_track_info_has_no_duration_when_segment_has_none() {
+        // GIVEN — a video track with no segment duration
+        let track = WebmTrack {
+            track_number: 1,
+            track_type: elements::TRACK_TYPE_VIDEO,
+            codec_id: elements::CODEC_ID_VP9.to_string(),
+            codec_private: None,
+            width: Some(1920),
+            height: Some(1080),
+            sample_rate: None,
+            channels: None,
+        };
+
+        // WHEN — we build TrackInfo without duration
+        let info = build_track_info(0, &track, None).unwrap();
+
+        // THEN — duration should be None
+        assert!(info.duration.is_none());
+    }
+
+    #[test]
+    fn test_that_build_track_info_sets_track_index() {
+        // GIVEN — a video track built at index 3
+        let track = WebmTrack {
+            track_number: 4,
+            track_type: elements::TRACK_TYPE_VIDEO,
+            codec_id: elements::CODEC_ID_VP9.to_string(),
+            codec_private: None,
+            width: Some(640),
+            height: Some(480),
+            sample_rate: None,
+            channels: None,
+        };
+
+        // WHEN — we build TrackInfo at index 3
+        let info = build_track_info(3, &track, None).unwrap();
+
+        // THEN — the track index should be 3
+        assert_eq!(info.index, TrackIndex(3));
+    }
+
+    #[test]
+    fn test_that_build_track_info_video_track_has_no_audio_info() {
+        // GIVEN — a video track
+        let track = WebmTrack {
+            track_number: 1,
+            track_type: elements::TRACK_TYPE_VIDEO,
+            codec_id: elements::CODEC_ID_VP9.to_string(),
+            codec_private: None,
+            width: Some(1920),
+            height: Some(1080),
+            sample_rate: None,
+            channels: None,
+        };
+
+        // WHEN — we build TrackInfo
+        let info = build_track_info(0, &track, None).unwrap();
+
+        // THEN — audio info should be None
+        assert!(info.audio.is_none());
+    }
+
+    #[test]
+    fn test_that_build_track_info_audio_track_has_no_video_info() {
+        // GIVEN — an audio track
+        let track = WebmTrack {
+            track_number: 2,
+            track_type: elements::TRACK_TYPE_AUDIO,
+            codec_id: elements::CODEC_ID_OPUS.to_string(),
+            codec_private: None,
+            width: None,
+            height: None,
+            sample_rate: Some(48000.0),
+            channels: Some(2),
+        };
+
+        // WHEN — we build TrackInfo
+        let info = build_track_info(1, &track, None).unwrap();
+
+        // THEN — video info should be None
+        assert!(info.video.is_none());
+    }
+}
