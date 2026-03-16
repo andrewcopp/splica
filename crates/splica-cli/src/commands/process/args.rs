@@ -11,7 +11,9 @@ use splica_mp4::boxes::stsd::CodecConfig;
 use splica_mp4::Mp4Demuxer;
 use splica_webm::WebmDemuxer;
 
-use crate::commands::{detect_format, AspectModeArg, DetectedFormat, EncodePreset, VideoCodecArg};
+use crate::commands::{
+    detect_format, AspectModeArg, AudioCodecArg, DetectedFormat, EncodePreset, VideoCodecArg,
+};
 
 // ---------------------------------------------------------------------------
 // Process args
@@ -29,6 +31,7 @@ pub(crate) struct ProcessArgs<'a> {
     pub crop: Option<&'a str>,
     pub volume: Option<&'a str>,
     pub codec: Option<&'a VideoCodecArg>,
+    pub audio_codec: Option<&'a AudioCodecArg>,
 }
 
 // ---------------------------------------------------------------------------

@@ -18,8 +18,8 @@ use super::args::{
 };
 use super::TranscodeOutput;
 use crate::commands::{
-    create_muxer, open_demuxer, output_container, validate_output_format, AspectModeArg, AudioMode,
-    EncodePreset, ProgressEvent, TranscodeAudioInfo, VideoCodecArg,
+    create_muxer, open_demuxer, output_container, validate_output_format, AspectModeArg,
+    AudioCodecArg, AudioMode, EncodePreset, ProgressEvent, TranscodeAudioInfo, VideoCodecArg,
 };
 
 // ---------------------------------------------------------------------------
@@ -156,9 +156,13 @@ pub(super) fn reencode(args: &ProcessArgs<'_>, json_mode: bool) -> Result<Transc
     // Validate codec-container compatibility before doing any work.
     validate_codec_container(args.codec, out_container)?;
 
-    let target_audio_codec = match out_container {
-        ContainerFormat::WebM | ContainerFormat::Mkv => splica_core::AudioCodec::Opus,
-        ContainerFormat::Mp4 => splica_core::AudioCodec::Aac,
+    let target_audio_codec = match args.audio_codec {
+        Some(AudioCodecArg::Aac) => splica_core::AudioCodec::Aac,
+        Some(AudioCodecArg::Opus) => splica_core::AudioCodec::Opus,
+        None => match out_container {
+            ContainerFormat::WebM | ContainerFormat::Mkv => splica_core::AudioCodec::Opus,
+            ContainerFormat::Mp4 => splica_core::AudioCodec::Aac,
+        },
     };
 
     // Determine which audio tracks need transcoding vs pass-through.

@@ -7,8 +7,8 @@ use miette::Result;
 pub(crate) use args::ProcessArgs;
 
 use super::{
-    classify_error, output_container, validate_output_format, CompleteEvent, ErrorResult,
-    OutputFormat, TranscodeAudioInfo,
+    classify_error, output_container, validate_output_format, AudioCodecArg, CompleteEvent,
+    ErrorResult, OutputFormat, TranscodeAudioInfo,
 };
 
 struct TranscodeOutput {
@@ -68,8 +68,45 @@ pub(crate) fn process(args: &ProcessArgs<'_>, format: &OutputFormat) -> Result<(
     }
 }
 
+/// Resolves the target audio codec from `--audio-codec` or falls back to the
+/// container default (MP4 -> AAC, WebM/MKV -> Opus).
+fn resolve_target_audio_codec(
+    audio_codec_arg: Option<&AudioCodecArg>,
+    container: splica_core::ContainerFormat,
+) -> splica_core::AudioCodec {
+    match audio_codec_arg {
+        Some(AudioCodecArg::Aac) => splica_core::AudioCodec::Aac,
+        Some(AudioCodecArg::Opus) => splica_core::AudioCodec::Opus,
+        None => match container {
+            splica_core::ContainerFormat::WebM | splica_core::ContainerFormat::Mkv => {
+                splica_core::AudioCodec::Opus
+            }
+            splica_core::ContainerFormat::Mp4 => splica_core::AudioCodec::Aac,
+        },
+    }
+}
+
+/// Pre-flight check: reject audio codec / container combinations that cannot work.
+fn validate_audio_codec_container(
+    audio_codec: Option<&AudioCodecArg>,
+    container: splica_core::ContainerFormat,
+) -> Result<()> {
+    if let (Some(AudioCodecArg::Opus), splica_core::ContainerFormat::Mp4) = (audio_codec, container)
+    {
+        return Err(miette::miette!(
+            "Opus is not supported in MP4 — use --audio-codec aac or choose a WebM/MKV output"
+        ));
+    }
+    Ok(())
+}
+
 fn process_inner(args: &ProcessArgs<'_>, json_mode: bool) -> Result<TranscodeOutput> {
     validate_output_format(args.output)?;
+
+    let out_container = output_container(args.output).unwrap_or(splica_core::ContainerFormat::Mp4);
+
+    // Validate audio codec / container compatibility before doing any work.
+    validate_audio_codec_container(args.audio_codec, out_container)?;
 
     // Determine if user explicitly requested re-encoding via any encoding option
     let user_requested_reencode = args.bitrate.is_some()
@@ -83,9 +120,6 @@ fn process_inner(args: &ProcessArgs<'_>, json_mode: bool) -> Result<TranscodeOut
 
     if !user_requested_reencode {
         // Check if stream copy is possible (all codecs compatible, no audio transcode needed)
-        let out_container =
-            output_container(args.output).unwrap_or(splica_core::ContainerFormat::Mp4);
-
         let demuxer = super::open_demuxer(args.input)?;
         let tracks = demuxer.tracks().to_vec();
 
@@ -94,12 +128,7 @@ fn process_inner(args: &ProcessArgs<'_>, json_mode: bool) -> Result<TranscodeOut
             .filter(|t| t.kind == splica_core::TrackKind::Video)
             .any(|t| !reencode::is_video_codec_compatible(&t.codec, out_container));
 
-        let target_audio_codec = match out_container {
-            splica_core::ContainerFormat::WebM | splica_core::ContainerFormat::Mkv => {
-                splica_core::AudioCodec::Opus
-            }
-            splica_core::ContainerFormat::Mp4 => splica_core::AudioCodec::Aac,
-        };
+        let target_audio_codec = resolve_target_audio_codec(args.audio_codec, out_container);
 
         let any_audio_needs_transcode = tracks
             .iter()

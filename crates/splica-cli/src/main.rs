@@ -6,7 +6,7 @@ use clap::{Parser, Subcommand};
 use miette::Result;
 
 use commands::process::ProcessArgs;
-use commands::{AspectModeArg, EncodePreset, OutputFormat, VideoCodecArg};
+use commands::{AspectModeArg, AudioCodecArg, EncodePreset, OutputFormat, VideoCodecArg};
 
 #[derive(Parser)]
 #[command(name = "splica", version, about = "Media processing tool")]
@@ -73,6 +73,11 @@ enum Commands {
         /// Default: auto-select based on output container.
         #[arg(long)]
         codec: Option<VideoCodecArg>,
+
+        /// Output audio codec (e.g., "aac", "opus").
+        /// Default: auto-select based on output container (MP4→AAC, WebM/MKV→Opus).
+        #[arg(long)]
+        audio_codec: Option<AudioCodecArg>,
 
         /// Output format for results (text or json).
         #[arg(long, default_value = "text")]
@@ -204,6 +209,7 @@ fn main() -> Result<()> {
             crop,
             volume,
             codec,
+            audio_codec,
             format,
         } => commands::process::process(
             &ProcessArgs {
@@ -218,6 +224,7 @@ fn main() -> Result<()> {
                 crop: crop.as_deref(),
                 volume: volume.as_deref(),
                 codec: codec.as_ref(),
+                audio_codec: audio_codec.as_ref(),
             },
             &format,
         ),
@@ -250,6 +257,7 @@ fn main() -> Result<()> {
                     crop: None,
                     volume: None,
                     codec: None,
+                    audio_codec: None,
                 },
                 &OutputFormat::Text,
             )
@@ -278,6 +286,7 @@ fn main() -> Result<()> {
                     crop: None,
                     volume: None,
                     codec: None,
+                    audio_codec: None,
                 },
                 &format,
             )
