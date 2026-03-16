@@ -255,7 +255,8 @@ impl Av1Encoder {
                     self.last_pts = Some(next);
                     next
                 } else {
-                    splica_core::Timestamp::new(0, 1).unwrap()
+                    splica_core::Timestamp::new(0, 1)
+                        .expect("Timestamp::new(0, 1) is infallible: denominator is non-zero")
                 };
 
                 let packet = Packet {
