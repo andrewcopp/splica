@@ -2,13 +2,15 @@ mod args;
 mod reencode;
 mod stream_copy;
 
+use std::time::Instant;
+
 use miette::Result;
 
 pub(crate) use args::ProcessArgs;
 
 use super::{
-    classify_error, output_container, validate_output_format, CompleteEvent, ErrorResult,
-    OutputFormat, TranscodeAudioInfo,
+    classify_error, output_container, validate_output_format, AudioMode, CompleteEvent,
+    ErrorResult, OutputFormat, TranscodeAudioInfo,
 };
 
 struct TranscodeOutput {
@@ -21,6 +23,8 @@ struct TranscodeOutput {
     output_codec: Option<String>,
     output_duration_secs: Option<f64>,
     output_bitrate_kbps: Option<u64>,
+    is_stream_copy: bool,
+    elapsed_secs: f64,
 }
 
 pub(crate) fn process(args: &ProcessArgs<'_>, format: &OutputFormat) -> Result<()> {
@@ -62,7 +66,10 @@ pub(crate) fn process(args: &ProcessArgs<'_>, format: &OutputFormat) -> Result<(
         }
     } else {
         match result {
-            Ok(_) => Ok(()),
+            Ok(out) => {
+                print_text_summary(args, &out);
+                Ok(())
+            }
             Err(e) => Err(e),
         }
     }
@@ -70,6 +77,8 @@ pub(crate) fn process(args: &ProcessArgs<'_>, format: &OutputFormat) -> Result<(
 
 fn process_inner(args: &ProcessArgs<'_>, json_mode: bool) -> Result<TranscodeOutput> {
     validate_output_format(args.output)?;
+
+    let start = Instant::now();
 
     // Determine if user explicitly requested re-encoding via any encoding option
     let user_requested_reencode = args.bitrate.is_some()
@@ -113,9 +122,106 @@ fn process_inner(args: &ProcessArgs<'_>, json_mode: bool) -> Result<TranscodeOut
             });
 
         if !video_needs_reencode && !any_audio_needs_transcode {
-            return stream_copy::stream_copy(args, json_mode);
+            let mut out = stream_copy::stream_copy(args, json_mode)?;
+            out.elapsed_secs = start.elapsed().as_secs_f64();
+            return Ok(out);
         }
     }
 
-    reencode::reencode(args, json_mode)
+    let mut out = reencode::reencode(args, json_mode)?;
+    out.elapsed_secs = start.elapsed().as_secs_f64();
+    Ok(out)
+}
+
+fn format_file_size(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = 1024 * KB;
+    const GB: u64 = 1024 * MB;
+
+    if bytes >= GB {
+        format!("{:.1} GB", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.1} MB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.1} KB", bytes as f64 / KB as f64)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
+fn format_duration(secs: f64) -> String {
+    let total = secs as u64;
+    let h = total / 3600;
+    let m = (total % 3600) / 60;
+    let s = total % 60;
+    let frac = secs - secs.floor();
+
+    if h > 0 {
+        format!("{h}:{m:02}:{s:02}")
+    } else {
+        format!("{m}:{s:02}.{:01}", (frac * 10.0) as u64)
+    }
+}
+
+fn print_text_summary(args: &ProcessArgs<'_>, out: &TranscodeOutput) {
+    let input_size = std::fs::metadata(args.input).map(|m| m.len()).unwrap_or(0);
+    let output_size = std::fs::metadata(args.output).map(|m| m.len()).unwrap_or(0);
+
+    let mode = if out.is_stream_copy {
+        "stream copy".to_string()
+    } else {
+        match &out.output_codec {
+            Some(codec) => format!("re-encode ({codec})"),
+            None => "re-encode".to_string(),
+        }
+    };
+
+    let size_change = if input_size > 0 {
+        let pct = ((output_size as f64 - input_size as f64) / input_size as f64) * 100.0;
+        if pct >= 0.0 {
+            format!("+{pct:.0}%")
+        } else {
+            format!("{pct:.0}%")
+        }
+    } else {
+        String::new()
+    };
+
+    let duration = out
+        .output_duration_secs
+        .map(format_duration)
+        .unwrap_or_else(|| "unknown".to_string());
+
+    let bitrate = out
+        .output_bitrate_kbps
+        .map(|b| format!("{b} kbps"))
+        .unwrap_or_else(|| "unknown".to_string());
+
+    eprintln!();
+    eprintln!(
+        "  Output: {} -> {} ({} -> {}, {})",
+        args.input.display(),
+        args.output.display(),
+        format_file_size(input_size),
+        format_file_size(output_size),
+        size_change,
+    );
+    eprintln!("  Mode: {mode} | Duration: {duration} | Bitrate: {bitrate}");
+
+    if !out.audio_tracks.is_empty() {
+        let audio_summary: Vec<String> = out
+            .audio_tracks
+            .iter()
+            .map(|a| {
+                let mode_str = match a.mode {
+                    AudioMode::PassThrough => "pass-through",
+                    AudioMode::ReEncoded => "re-encoded",
+                };
+                format!("{} ({})", a.codec, mode_str)
+            })
+            .collect();
+        eprintln!("  Audio: {}", audio_summary.join(", "));
+    }
+
+    eprintln!("  Time: {:.1}s", out.elapsed_secs);
 }
