@@ -9,7 +9,7 @@ use splica_mp4::Mp4Muxer;
 use splica_webm::WebmMuxer;
 
 use super::args::ProcessArgs;
-use super::reencode::{probe_output_qc, OutputQc};
+use super::reencode::probe_output_qc;
 use super::TranscodeOutput;
 use crate::commands::{
     open_demuxer, output_container, AudioMode, ContainerFormat, TranscodeAudioInfo,
@@ -94,15 +94,7 @@ pub(super) fn stream_copy(args: &ProcessArgs<'_>, json_mode: bool) -> Result<Tra
             .wrap_err("failed to finalize output")?;
     }
 
-    let qc = if json_mode {
-        probe_output_qc(args.output)
-    } else {
-        OutputQc {
-            codec: None,
-            duration_secs: None,
-            bitrate_kbps: None,
-        }
-    };
+    let qc = probe_output_qc(args.output);
 
     Ok(TranscodeOutput {
         packets_read: packet_count,
@@ -114,5 +106,7 @@ pub(super) fn stream_copy(args: &ProcessArgs<'_>, json_mode: bool) -> Result<Tra
         output_codec: qc.codec,
         output_duration_secs: qc.duration_secs,
         output_bitrate_kbps: qc.bitrate_kbps,
+        is_stream_copy: true,
+        elapsed_secs: 0.0,
     })
 }

@@ -345,15 +345,7 @@ pub(super) fn reencode(args: &ProcessArgs<'_>, json_mode: bool) -> Result<Transc
         eprintln!("\r  Done.                                        ");
     }
 
-    let qc = if json_mode {
-        probe_output_qc(args.output)
-    } else {
-        OutputQc {
-            codec: None,
-            duration_secs: None,
-            bitrate_kbps: None,
-        }
-    };
+    let qc = probe_output_qc(args.output);
 
     Ok(TranscodeOutput {
         packets_read: counter_packets_read.load(Ordering::Relaxed),
@@ -365,6 +357,8 @@ pub(super) fn reencode(args: &ProcessArgs<'_>, json_mode: bool) -> Result<Transc
         output_codec: qc.codec,
         output_duration_secs: qc.duration_secs,
         output_bitrate_kbps: qc.bitrate_kbps,
+        is_stream_copy: false,
+        elapsed_secs: 0.0,
     })
 }
 
