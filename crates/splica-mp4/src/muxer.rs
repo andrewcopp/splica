@@ -9,7 +9,8 @@
 use std::io::{Seek, SeekFrom, Write};
 
 use splica_core::{
-    Codec, MuxError, Muxer, Packet, ResourceBudget, TrackIndex, TrackInfo, TrackKind, VideoCodec,
+    Codec, MuxError, Muxer, Packet, ResourceBudget, Timestamp, TrackIndex, TrackInfo, TrackKind,
+    VideoCodec,
 };
 
 use crate::box_builders::{
@@ -183,8 +184,11 @@ impl<W: Write + Seek> Mp4Muxer<W> {
         self.bytes_written += size as u64;
         self.packets_written += 1;
 
-        let dts_ticks = packet.dts.ticks();
-        let cts_offset = (packet.pts.ticks() - packet.dts.ticks()) as i32;
+        // Convert packet timestamps from their native timebase to the track's timescale
+        let track_timescale = self.tracks[track_idx].timescale;
+        let dts_ticks = rescale_timestamp(packet.dts, track_timescale);
+        let pts_ticks = rescale_timestamp(packet.pts, track_timescale);
+        let cts_offset = (pts_ticks - dts_ticks) as i32;
 
         self.tracks[track_idx].samples.push(MuxSample {
             offset,
@@ -406,6 +410,20 @@ impl<W: Write + Seek> Muxer for Mp4Muxer<W> {
     fn finalize(&mut self) -> Result<(), MuxError> {
         self.finalize_file()
     }
+}
+
+/// Rescales a `Timestamp` to the target timescale.
+///
+/// If the timestamp's native timebase already matches `target_timescale`,
+/// the tick value is returned as-is. Otherwise the ticks are converted
+/// using 128-bit intermediate arithmetic to avoid overflow.
+fn rescale_timestamp(ts: Timestamp, target_timescale: u32) -> i64 {
+    if ts.timebase() == target_timescale {
+        return ts.ticks();
+    }
+    ts.rescale(target_timescale)
+        .map(|t| t.ticks())
+        .unwrap_or(ts.ticks())
 }
 
 // ---------------------------------------------------------------------------

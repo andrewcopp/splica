@@ -4,6 +4,7 @@
 //! is required — this module uses only the safe Rust API.
 
 use std::any::Any;
+use std::collections::HashMap;
 
 use bytes::Bytes;
 use rav1e::prelude::*;
@@ -28,6 +29,10 @@ pub struct Av1Encoder {
     track_index: TrackIndex,
     /// Buffered encoded packet (populated after receive_packet call to rav1e).
     pending_packet: Option<Packet>,
+    /// Map from input frame number to original input PTS.
+    pts_by_frameno: HashMap<u64, splica_core::Timestamp>,
+    /// Last PTS assigned to an output packet, used as fallback during flush.
+    last_pts: Option<splica_core::Timestamp>,
     /// Whether end-of-stream has been signaled.
     flushing: bool,
     /// Frame counter for PTS tracking.
@@ -198,6 +203,8 @@ impl Av1EncoderBuilder {
             },
             track_index: self.track_index,
             pending_packet: None,
+            pts_by_frameno: HashMap::new(),
+            last_pts: None,
             flushing: false,
             frame_count: 0,
         })
@@ -230,15 +237,25 @@ impl Av1Encoder {
     }
 
     /// Tries to receive a packet from rav1e and convert it to a splica Packet.
-    fn try_receive(&mut self, fallback_pts: splica_core::Timestamp) -> Result<(), CodecError> {
+    fn try_receive(&mut self) -> Result<(), CodecError> {
         match self.inner.receive_packet() {
             Ok(pkt) => {
                 let is_keyframe = pkt.frame_type == FrameType::KEY;
 
-                // Use the input frame number to reconstruct PTS
-                let pts =
-                    splica_core::Timestamp::new(pkt.input_frameno as i64, fallback_pts.timebase())
-                        .unwrap_or(fallback_pts);
+                // Look up the original input PTS by frame number
+                let pts = if let Some(original_pts) = self.pts_by_frameno.remove(&pkt.input_frameno)
+                {
+                    self.last_pts = Some(original_pts);
+                    original_pts
+                } else if let Some(last) = self.last_pts {
+                    // Fallback during flush: increment from last known PTS
+                    let next = splica_core::Timestamp::new(last.ticks() + 1, last.timebase())
+                        .unwrap_or(last);
+                    self.last_pts = Some(next);
+                    next
+                } else {
+                    splica_core::Timestamp::new(0, 1).unwrap()
+                };
 
                 let packet = Packet {
                     track_index: self.track_index,
@@ -292,12 +309,16 @@ impl Encoder for Av1Encoder {
                 let mut rav1e_frame = self.inner.new_frame();
                 copy_video_frame_to_rav1e(video_frame, &mut rav1e_frame);
 
+                // Store input PTS keyed by frame number for later retrieval
+                self.pts_by_frameno
+                    .insert(self.frame_count, video_frame.pts);
+
                 // Send frame to rav1e — handle EnoughData by draining first
                 match self.inner.send_frame(rav1e_frame) {
                     Ok(()) => {}
                     Err(EncoderStatus::EnoughData) => {
                         // Drain a packet then retry
-                        self.try_receive(video_frame.pts)?;
+                        self.try_receive()?;
                         let retry_frame = self.inner.new_frame();
                         // Re-copy since we consumed the first frame
                         let mut retry = retry_frame;
@@ -317,7 +338,7 @@ impl Encoder for Av1Encoder {
                 }
 
                 // Try to receive a packet
-                self.try_receive(video_frame.pts)?;
+                self.try_receive()?;
                 self.frame_count += 1;
             }
             Some(Frame::Audio(_)) => {
@@ -331,8 +352,7 @@ impl Encoder for Av1Encoder {
                 self.inner.flush();
 
                 // Try to drain remaining packets
-                let pts = splica_core::Timestamp::new(0, 1).unwrap();
-                self.try_receive(pts)?;
+                self.try_receive()?;
             }
         }
 
@@ -347,8 +367,7 @@ impl Encoder for Av1Encoder {
 
         // If flushing, keep draining rav1e
         if self.flushing {
-            let pts = splica_core::Timestamp::new(0, 1).unwrap();
-            self.try_receive(pts)
+            self.try_receive()
                 .map_err(|e| EncodeError::Other(Box::new(e)))?;
             return Ok(self.pending_packet.take());
         }

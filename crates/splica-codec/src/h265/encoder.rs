@@ -4,7 +4,7 @@
 //! Every unsafe block has a `// SAFETY:` comment explaining the invariant.
 
 use std::any::Any;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::ffi::CString;
 use std::ptr;
 
@@ -34,6 +34,10 @@ pub struct H265Encoder {
     track_index: TrackIndex,
     /// Buffered encoded packets from the last send_frame call.
     pending_packets: VecDeque<Packet>,
+    /// Map from picture order count (poc) to original input PTS.
+    pts_by_poc: HashMap<i32, splica_core::Timestamp>,
+    /// Last PTS assigned to an output packet, used as fallback during flush.
+    last_pts: Option<splica_core::Timestamp>,
     /// Frame counter for PTS tracking.
     frame_count: u64,
     /// Whether end-of-stream has been signaled.
@@ -265,6 +269,8 @@ impl H265EncoderBuilder {
             },
             track_index: self.track_index,
             pending_packets: VecDeque::new(),
+            pts_by_poc: HashMap::new(),
+            last_pts: None,
             frame_count: 0,
             flushing: false,
             header_data,
@@ -365,16 +371,19 @@ impl H265Encoder {
                 self.header_sent = true;
             }
 
-            // Use picture order count (poc) for PTS reconstruction
-            let pts_ticks = info_out.poc as i64;
-
-            // Use poc as the basis for pts (in encoder timebase units)
-            let timebase = self
-                .max_frame_rate
-                .map(|fps| fps.round() as u32)
-                .unwrap_or(30);
-            let pts = splica_core::Timestamp::new(pts_ticks, timebase)
-                .unwrap_or_else(|| splica_core::Timestamp::new(0, 1).unwrap());
+            // Look up the original input PTS by poc instead of reconstructing
+            let pts = if let Some(original_pts) = self.pts_by_poc.remove(&info_out.poc) {
+                self.last_pts = Some(original_pts);
+                original_pts
+            } else if let Some(last) = self.last_pts {
+                // Fallback during flush: increment from last known PTS
+                let next =
+                    splica_core::Timestamp::new(last.ticks() + 1, last.timebase()).unwrap_or(last);
+                self.last_pts = Some(next);
+                next
+            } else {
+                splica_core::Timestamp::new(0, 1).unwrap()
+            };
 
             let packet = Packet {
                 track_index: self.track_index,
@@ -472,6 +481,8 @@ impl Encoder for H265Encoder {
                     p.pts = video_frame.pts.ticks();
                 }
 
+                self.pts_by_poc
+                    .insert(self.frame_count as i32, video_frame.pts);
                 let result = self.encode_frame(pic);
 
                 // Free the input picture
