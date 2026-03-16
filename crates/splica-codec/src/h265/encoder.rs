@@ -5,22 +5,19 @@
 
 use std::any::Any;
 use std::collections::VecDeque;
-use std::ffi::CString;
 use std::ptr;
 
 use bytes::Bytes;
 use splica_core::error::EncodeError;
-use splica_core::media::{
-    ColorPrimaries, ColorRange, ColorSpace, Frame, MatrixCoefficients, Packet, PixelFormat,
-    QualityTarget, TrackIndex, TransferCharacteristics, VideoFrame,
-};
+use splica_core::media::{ColorSpace, Frame, Packet, PixelFormat, QualityTarget, TrackIndex};
 use splica_core::Encoder;
 
 use kvazaar_sys::{
-    collect_chunks, kvz_api, kvz_api_get, kvz_chroma_format, kvz_config, kvz_data_chunk,
-    kvz_encoder, kvz_frame_info, kvz_nal_unit_type, kvz_picture,
+    collect_chunks, kvz_api, kvz_chroma_format, kvz_data_chunk, kvz_encoder, kvz_frame_info,
+    kvz_nal_unit_type, kvz_picture,
 };
 
+use super::ffi_helpers::{copy_plane, open_kvazaar_encoder, KvazaarEncoderParams};
 use crate::error::CodecError;
 
 /// H.265 encoder wrapping kvazaar.
@@ -137,126 +134,18 @@ impl H265EncoderBuilder {
             });
         }
 
-        // SAFETY: kvz_api_get(8) returns a pointer to a static, immutable API
-        // table for 8-bit encoding. The pointer is valid for the lifetime of
-        // the process if non-null.
-        let api = unsafe { kvz_api_get(8) };
-        if api.is_null() {
-            return Err(CodecError::EncoderError {
-                message: "kvazaar does not support 8-bit encoding".to_string(),
-            });
-        }
-        // SAFETY: api is non-null and points to a static kvz_api struct.
-        let api = unsafe { &*api };
-
-        // Allocate and initialize config
-        let config_alloc = api.config_alloc.ok_or_else(|| CodecError::EncoderError {
-            message: "kvazaar API missing config_alloc".to_string(),
+        let handle = open_kvazaar_encoder(KvazaarEncoderParams {
+            width: self.width,
+            height: self.height,
+            bitrate_bps: self.bitrate_bps,
+            qp: self.qp,
+            max_frame_rate: self.max_frame_rate,
+            color_space: self.color_space,
         })?;
-        let config_init = api.config_init.ok_or_else(|| CodecError::EncoderError {
-            message: "kvazaar API missing config_init".to_string(),
-        })?;
-        let config_parse = api.config_parse.ok_or_else(|| CodecError::EncoderError {
-            message: "kvazaar API missing config_parse".to_string(),
-        })?;
-
-        // SAFETY: config_alloc returns a heap-allocated kvz_config or null.
-        let cfg = unsafe { config_alloc() };
-        if cfg.is_null() {
-            return Err(CodecError::EncoderError {
-                message: "kvazaar config_alloc returned null".to_string(),
-            });
-        }
-        // SAFETY: cfg is a valid, non-null kvz_config pointer from config_alloc.
-        let ok = unsafe { config_init(cfg) };
-        if ok == 0 {
-            // SAFETY: cfg was allocated by config_alloc, safe to destroy.
-            unsafe { api.config_destroy.map(|f| f(cfg)) };
-            return Err(CodecError::EncoderError {
-                message: "kvazaar config_init failed".to_string(),
-            });
-        }
-
-        // Set dimensions, QP, and rate control via config_parse
-        set_config_option(config_parse, cfg, "width", &self.width.to_string())?;
-        set_config_option(config_parse, cfg, "height", &self.height.to_string())?;
-
-        if self.bitrate_bps > 0 {
-            set_config_option(config_parse, cfg, "bitrate", &self.bitrate_bps.to_string())?;
-            set_config_option(config_parse, cfg, "rc-algorithm", "oba")?;
-        } else {
-            set_config_option(config_parse, cfg, "qp", &self.qp.to_string())?;
-        }
-
-        // Set intra period for keyframe interval (must be a multiple of B-gop length 16)
-        set_config_option(config_parse, cfg, "period", "64")?;
-        // Emit VPS/SPS/PPS with every intra frame
-        set_config_option(config_parse, cfg, "vps-period", "1")?;
-
-        if let Some(fps) = self.max_frame_rate {
-            let fps_int = fps.round() as u32;
-            if fps_int > 0 {
-                set_config_option(config_parse, cfg, "input-fps", &fps_int.to_string())?;
-            }
-        }
-
-        // Set VUI color space parameters
-        if let Some(cs) = &self.color_space {
-            let prim = color_primaries_to_itu(cs.primaries);
-            let transfer = transfer_characteristics_to_itu(cs.transfer);
-            let matrix = matrix_coefficients_to_itu(cs.matrix);
-            let range = match cs.range {
-                ColorRange::Full => "full",
-                ColorRange::Limited => "limited",
-            };
-
-            set_config_option(config_parse, cfg, "colorprim", &prim.to_string())?;
-            set_config_option(config_parse, cfg, "transfer", &transfer.to_string())?;
-            set_config_option(config_parse, cfg, "colormatrix", &matrix.to_string())?;
-            set_config_option(config_parse, cfg, "range", range)?;
-        }
-
-        // Open encoder
-        let encoder_open = api.encoder_open.ok_or_else(|| CodecError::EncoderError {
-            message: "kvazaar API missing encoder_open".to_string(),
-        })?;
-        // SAFETY: cfg is a valid, fully configured kvz_config pointer.
-        let encoder = unsafe { encoder_open(cfg) };
-
-        // Config is consumed by encoder_open; we no longer own it.
-        // (kvazaar copies the config internally, but we don't destroy it
-        // here — kvazaar manages its own copy.)
-        // SAFETY: cfg was allocated by config_alloc. We destroy our copy now
-        // since encoder_open has copied it.
-        unsafe { api.config_destroy.map(|f| f(cfg)) };
-
-        if encoder.is_null() {
-            return Err(CodecError::EncoderError {
-                message: "kvazaar encoder_open returned null".to_string(),
-            });
-        }
-
-        // Get header data (VPS/SPS/PPS)
-        let mut header_data = Vec::new();
-        if let Some(encoder_headers) = api.encoder_headers {
-            let mut data_out: *mut kvz_data_chunk = ptr::null_mut();
-            let mut len_out: u32 = 0;
-            // SAFETY: encoder is a valid, non-null kvz_encoder pointer.
-            // data_out and len_out are valid mutable references.
-            let ok = unsafe { encoder_headers(encoder, &mut data_out, &mut len_out) };
-            if ok != 0 && !data_out.is_null() {
-                // SAFETY: data_out is a valid kvz_data_chunk chain from encoder_headers.
-                header_data = unsafe { collect_chunks(data_out) };
-                // SAFETY: data_out was allocated by kvazaar; chunk_free releases it.
-                if let Some(chunk_free) = api.chunk_free {
-                    unsafe { chunk_free(data_out) };
-                }
-            }
-        }
 
         Ok(H265Encoder {
-            api,
-            encoder,
+            api: handle.api,
+            encoder: handle.encoder,
             config: H265EncoderConfig {
                 bitrate_bps: self.bitrate_bps,
                 qp: self.qp,
@@ -267,7 +156,7 @@ impl H265EncoderBuilder {
             pending_packets: VecDeque::new(),
             frame_count: 0,
             flushing: false,
-            header_data,
+            header_data: handle.header_data,
             header_sent: false,
             max_frame_rate: self.max_frame_rate,
         })
@@ -530,84 +419,6 @@ impl Drop for H265Encoder {
 // to the C library and protected by its own synchronization. The kvz_api table
 // is a static immutable struct. The encoder pointer is only used from &mut self.
 unsafe impl Send for H265Encoder {}
-
-/// Copies one plane from a VideoFrame to a kvazaar picture buffer.
-///
-/// # Safety
-///
-/// `dst` must point to a buffer with at least `dst_stride * height` bytes.
-unsafe fn copy_plane(
-    frame: &VideoFrame,
-    plane_idx: usize,
-    dst: *mut u8,
-    dst_stride: usize,
-    width: usize,
-    height: usize,
-) {
-    let plane = &frame.planes[plane_idx];
-    let src = &frame.data[plane.offset..];
-    for row in 0..height {
-        let src_row = &src[row * plane.stride..row * plane.stride + width];
-        // SAFETY: dst is a valid kvazaar plane buffer. We write exactly
-        // `width` bytes at offset `row * dst_stride`, which is within bounds
-        // of the allocated plane.
-        unsafe {
-            ptr::copy_nonoverlapping(src_row.as_ptr(), dst.add(row * dst_stride), width);
-        }
-    }
-}
-
-/// Helper to call config_parse and convert errors.
-fn set_config_option(
-    config_parse: unsafe extern "C" fn(*mut kvz_config, *const i8, *const i8) -> i32,
-    cfg: *mut kvz_config,
-    name: &str,
-    value: &str,
-) -> Result<(), CodecError> {
-    let c_name = CString::new(name).map_err(|_| CodecError::InvalidConfig {
-        message: format!("invalid config name: {name}"),
-    })?;
-    let c_value = CString::new(value).map_err(|_| CodecError::InvalidConfig {
-        message: format!("invalid config value: {value}"),
-    })?;
-    // SAFETY: cfg is a valid kvz_config pointer. c_name and c_value are
-    // valid null-terminated C strings.
-    let ok = unsafe { config_parse(cfg, c_name.as_ptr(), c_value.as_ptr()) };
-    if ok == 0 {
-        return Err(CodecError::InvalidConfig {
-            message: format!("kvazaar rejected config {name}={value}"),
-        });
-    }
-    Ok(())
-}
-
-/// Maps splica ColorPrimaries to ITU-T H.265 colour_primaries value.
-fn color_primaries_to_itu(p: ColorPrimaries) -> u8 {
-    match p {
-        ColorPrimaries::Bt709 => 1,
-        ColorPrimaries::Bt2020 => 9,
-        ColorPrimaries::Smpte432 => 12,
-    }
-}
-
-/// Maps splica TransferCharacteristics to ITU-T H.265 transfer_characteristics value.
-fn transfer_characteristics_to_itu(t: TransferCharacteristics) -> u8 {
-    match t {
-        TransferCharacteristics::Bt709 => 1,
-        TransferCharacteristics::Smpte2084 => 16,
-        TransferCharacteristics::HybridLogGamma => 18,
-    }
-}
-
-/// Maps splica MatrixCoefficients to ITU-T H.265 matrix_coefficients value.
-fn matrix_coefficients_to_itu(m: MatrixCoefficients) -> u8 {
-    match m {
-        MatrixCoefficients::Identity => 0,
-        MatrixCoefficients::Bt709 => 1,
-        MatrixCoefficients::Bt2020NonConstant => 9,
-        MatrixCoefficients::Bt2020Constant => 10,
-    }
-}
 
 #[cfg(test)]
 mod tests {
